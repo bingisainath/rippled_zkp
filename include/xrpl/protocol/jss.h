@@ -736,6 +736,14 @@ JSS(xchain_owned_claim_id);   // in: LedgerEntry, AccountObjects
 JSS(xchain_owned_create_account_claim_id);  // in: LedgerEntry
 JSS(NegativeUNL);                           // out: ValidatorList; ledger type
 JSS(ShieldedPool);
+JSS(RollupState);      // ltROLLUP_STATE = 0x0084 — Phase 1
+JSS(NullifierPage);    // ltNULLIFIER_PAGE = 0x0085 — Phase 1
+JSS(BatchProof);       // sfBatchProof — Phase 1 rollup blob
+JSS(BatchId);          // sfBatchId — Phase 1 rollup counter
+JSS(PrevRoot);         // sfPrevRoot — Phase 1 rollup state
+JSS(RollupRoot);       // sfRollupRoot — Phase 1 rollup state
+JSS(TxCount);          // sfTxCount — Phase 1 rollup batch size
+JSS(SequencerPubKey);  // sfSequencerPubKey — Phase 1 rollup auth
 JSS(nullifier);
 // clang-format on
 

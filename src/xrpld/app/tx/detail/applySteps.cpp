@@ -64,6 +64,8 @@
 
 #include <stdexcept>
 
+#include <libxrpl/zkp/rollup/BatchVerifier.h>
+
 namespace ripple {
 
 namespace {

@@ -507,3 +507,18 @@ TRANSACTION(ttZK_WITHDRAW, 1002, ZkWithdraw, ({
     {sfZKProof, soeOPTIONAL},
     {sfNullifier, soeREQUIRED},
 }))
+
+
+// -----------------------------------------------------------------------------
+// ZK-Rollup batch transaction (Phase 1).
+// Code 61 confirmed free in v2.2 §1.2 Phase 0 audit.
+// (Code 40 = ttAMMDelete collision — DO NOT use 40 as in older doc versions.)
+// -----------------------------------------------------------------------------
+TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
+    {sfBatchProof,       soeREQUIRED},
+    {sfBatchId,          soeREQUIRED},
+    {sfPrevRoot,         soeREQUIRED},
+    {sfRollupRoot,       soeREQUIRED},
+    {sfTxCount,          soeREQUIRED},
+    {sfSequencerPubKey,  soeREQUIRED},
+}))

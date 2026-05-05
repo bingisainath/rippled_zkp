@@ -399,3 +399,20 @@ TYPED_SFIELD(sfAnchor,             UINT256,    74)  // Tree anchor for proof ver
 TYPED_SFIELD(sfCreatedTime,        UINT32,     75)  // Timestamp when commitment created
 TYPED_SFIELD(sfShieldedBalance,    AMOUNT,     76)  // Shielded pool balance
 TYPED_SFIELD(sfTimestamp,          UINT32,     77) // Timestamp for the note creation or spending
+
+
+// -----------------------------------------------------------------------------
+// ZK-Rollup foundation fields (Phase 1). Codes confirmed free in v2.2 audit.
+// Do NOT reuse any existing ZKP codes (sfCurrentRoot=36, sfShieldedState=33,
+// sfZKProof=60, etc. — see v2.2 §1.1 full table).
+// -----------------------------------------------------------------------------
+
+TYPED_SFIELD(sfBatchProof,        VL,      34)  // was TBD VL/30
+TYPED_SFIELD(sfRollupRoot,        UINT256, 34)  // was sfNewRoot 33; renamed to avoid sfCurrentRoot/36 collision
+TYPED_SFIELD(sfPrevRoot,          UINT256, 35)  // was TBD UINT256/32
+TYPED_SFIELD(sfSequencerPubKey,   VL,      35)
+TYPED_SFIELD(sfSequencerKey,      VL,      36)  // was TBD VL/39
+TYPED_SFIELD(sfBatchId,           UINT32,  47)
+TYPED_SFIELD(sfTxCount,           UINT32,  49)
+TYPED_SFIELD(sfBatchCounter,      UINT32,  78)
+TYPED_SFIELD(sfRollupTreeDepth,   UINT8,    6)  // renamed from sfTreeDepth

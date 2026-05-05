@@ -485,6 +485,8 @@ LedgerEntryTypesMatch::visitEntry(
             case ltMPTOKEN_ISSUANCE:
             case ltMPTOKEN:
             case ltCREDENTIAL:
+            case ltROLLUP_STATE:
+            case ltNULLIFIER_PAGE:
                 break;
             default:
                 invalidTypeAdded_ = true;
