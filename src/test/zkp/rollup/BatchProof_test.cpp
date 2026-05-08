@@ -232,7 +232,7 @@ public:
     }
 };
 
-BEAST_DEFINE_TESTSUITE(BatchProof, zkp_rollup, ripple);
+BEAST_DEFINE_TESTSUITE(BatchProof, rollup, ripple);
 
 }  // namespace test
 }  // namespace rollup

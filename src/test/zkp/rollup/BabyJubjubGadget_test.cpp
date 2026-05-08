@@ -199,7 +199,7 @@ public:
     }
 };
 
-BEAST_DEFINE_TESTSUITE(BabyJubjubGadget, zkp, ripple);
+BEAST_DEFINE_TESTSUITE(BabyJubjubGadget, rollup, ripple);
 
 }  // namespace test
 }  // namespace ripple

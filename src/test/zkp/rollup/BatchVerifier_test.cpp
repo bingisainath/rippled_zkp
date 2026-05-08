@@ -281,7 +281,7 @@ public:
     }
 };
 
-BEAST_DEFINE_TESTSUITE(BatchVerifier, zkp_rollup, ripple);
+BEAST_DEFINE_TESTSUITE(BatchVerifier, rollup, ripple);
 
 }  // namespace test
 }  // namespace ripple
