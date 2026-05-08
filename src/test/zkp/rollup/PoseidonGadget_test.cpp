@@ -211,7 +211,7 @@ public:
     }
 };
 
-BEAST_DEFINE_TESTSUITE(PoseidonGadget, zkp, ripple);
+BEAST_DEFINE_TESTSUITE(PoseidonGadget, rollup, ripple);
 
 }  // namespace test
 }  // namespace ripple

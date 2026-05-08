@@ -286,7 +286,7 @@ public:
 // because of the trusted-setup, so it should not be in the default fast-test
 // rotation. Invoke explicitly via:
 //     ./rippled --unittest=ripple.zkp.RollupProver
-BEAST_DEFINE_TESTSUITE_MANUAL(RollupProver, zkp, ripple);
+BEAST_DEFINE_TESTSUITE_MANUAL(RollupProver, rollup, ripple);
 
 }  // namespace test
 }  // namespace ripple
