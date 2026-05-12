@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin.
 // SPDX-License-Identifier: ISC
 //
-// rollup/RollupMerkleTree.cpp  --- Phase 3.
+// rollup/RollupMerkleTree.cpp  --- Phase 3 + Phase 4a frontier serialisation.
+
+#include <cstring>
+#include <stdexcept>
 
 #include "RollupMerkleTree.h"
 
 #include "PoseidonHash.h"
-
-#include <stdexcept>
 
 namespace ripple {
 namespace zkp {
@@ -40,13 +41,12 @@ RollupMerkleTree::RollupMerkleTree(std::size_t depth)
 void
 RollupMerkleTree::initializeEmptyHashes()
 {
-
     // PoseidonHash::hash() asserts that initialize() has been called.  Make
     // the dependency explicit and idempotent so callers (sequencer, tests,
     // BatchVerifier) don't have to remember the order.  PoseidonHash::initialize
     // itself ensures alt_bn128_pp::init_public_params() has run.
     PoseidonHash::initialize();
-    
+
     // empty_hashes_[0] = Poseidon(0, 0) — NOT uint256{}.  This is the central
     // semantic difference from IncrementalMerkleTree (cf. v2.2 §5).
     empty_hashes_[0] = h(uint256{}, uint256{});
@@ -329,6 +329,121 @@ RollupMerkleTree::clear()
         level.clear();
 
     // empty_hashes_ stays as-is — they're constants for this depth.
+}
+
+// =============================================================================
+// Phase 4a: frontier serialisation
+// =============================================================================
+//
+// Compact wire format for on-chain persistence in the RollupState SLE.
+// Layout (little-endian):
+//   8 bytes  : next_position_
+//   For each level L in [0, depth_]:
+//     1 byte  : presence flag (1 if a frontier node exists, 0 otherwise)
+//     if present:
+//       8 bytes  : position within level
+//       32 bytes : node hash
+//
+// At depth 32 the max blob is 8 + 33*41 = 1361 bytes; well within STI_VL.
+//
+// Note: this dumps only the rightmost cached node at each level, which is
+// sufficient to reconstruct correct roots and authentication paths for all
+// future append/update_leaf calls (the empty subtrees are reproduced by
+// empty_hashes_ on the loaded side).
+
+namespace {
+
+void
+writeU64LE(std::vector<std::uint8_t>& out, std::uint64_t v)
+{
+    for (int i = 0; i < 8; ++i)
+        out.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF));
+}
+
+std::uint64_t
+readU64LE(std::uint8_t const* p)
+{
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i)
+        v |= static_cast<std::uint64_t>(p[i]) << (8 * i);
+    return v;
+}
+
+}  // anonymous namespace
+
+std::vector<std::uint8_t>
+RollupMerkleTree::serialiseFrontier() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<std::uint8_t> out;
+    out.reserve(8 + (depth_ + 1) * 41);
+
+    writeU64LE(out, static_cast<std::uint64_t>(next_position_));
+
+    for (std::size_t level = 0; level <= depth_; ++level)
+    {
+        auto const& levelMap = cached_nodes_[level];
+        if (levelMap.empty())
+        {
+            out.push_back(0);  // presence flag = absent
+            continue;
+        }
+
+        auto const& [pos, hash] = *levelMap.rbegin();
+
+        out.push_back(1);  // presence flag = present
+        writeU64LE(out, static_cast<std::uint64_t>(pos));
+        for (int b = 0; b < 32; ++b)
+            out.push_back(hash.data()[b]);
+    }
+
+    return out;
+}
+
+void
+RollupMerkleTree::deserialiseFrontier(std::vector<std::uint8_t> const& blob)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (blob.size() < 8)
+        throw std::runtime_error(
+            "RollupMerkleTree::deserialiseFrontier: blob too short for header");
+
+    std::size_t offset = 0;
+    next_position_ = static_cast<std::size_t>(readU64LE(blob.data() + offset));
+    offset += 8;
+
+    // Reset cached state before reloading.
+    for (auto& levelMap : cached_nodes_)
+        levelMap.clear();
+
+    for (std::size_t level = 0; level <= depth_; ++level)
+    {
+        if (offset >= blob.size())
+            throw std::runtime_error(
+                "RollupMerkleTree::deserialiseFrontier: blob truncated mid-frontier");
+
+        std::uint8_t const present = blob[offset++];
+        if (present == 0)
+            continue;
+        if (present != 1)
+            throw std::runtime_error(
+                "RollupMerkleTree::deserialiseFrontier: invalid presence flag");
+
+        if (offset + 8 + 32 > blob.size())
+            throw std::runtime_error(
+                "RollupMerkleTree::deserialiseFrontier: blob truncated in entry");
+
+        auto const pos = static_cast<std::size_t>(readU64LE(blob.data() + offset));
+        offset += 8;
+
+        uint256 hash;
+        std::memcpy(hash.data(), blob.data() + offset, 32);
+        offset += 32;
+
+        cached_nodes_[level][pos] = hash;
+    }
 }
 
 }  // namespace rollup

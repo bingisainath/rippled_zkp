@@ -88,6 +88,8 @@
 #include <utility>
 #include <variant>
 
+#include <libxrpl/zkp/rollup/RollupModule.h>
+
 namespace ripple {
 
 // VFALCO TODO Move the function definitions into the class declaration
@@ -1265,6 +1267,11 @@ ApplicationImp::setup(boost::program_options::variables_map const& cmdline)
     }
 
     Pathfinder::initPathTable();
+
+    // Phase 4a: load RollupProver Groth16 keys at node startup,
+    // not lazily inside preclaim(). See ZkProver lazy-init anti-pattern
+    // in ZkDeposit::preclaim() for what we are explicitly avoiding.
+    ripple::zkp::rollup::RollupModule::onStart();
 
     auto const startUp = config_->START_UP;
     JLOG(m_journal.debug()) << "startUp: " << startUp;

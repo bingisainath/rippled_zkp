@@ -1,11 +1,12 @@
 //------------------------------------------------------------------------------
 /*
-    Phase 1 — Foundation: RollupState SLE helper implementation.
+    Phase 1 + Phase 4a: RollupState SLE helpers.
 */
 //==============================================================================
 
 #include <libxrpl/zkp/rollup/RollupState.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>
+#include <libxrpl/zkp/rollup/RollupMerkleTree.h>
 
 #include <xrpl/basics/Slice.h>
 #include <xrpl/protocol/SField.h>
@@ -16,10 +17,6 @@
 namespace ripple {
 namespace zkp {
 namespace rollup {
-
-// =============================================================================
-// Read helpers
-// =============================================================================
 
 std::uint32_t
 RollupState::batchCounter(STLedgerEntry const& sle)
@@ -39,10 +36,6 @@ RollupState::treeDepth(STLedgerEntry const& sle)
     return sle.getFieldU8(sfRollupTreeDepth);
 }
 
-// =============================================================================
-// Write helpers
-// =============================================================================
-
 void
 RollupState::setBatchCounter(STLedgerEntry& sle, std::uint32_t v)
 {
@@ -54,10 +47,6 @@ RollupState::setRollupRoot(STLedgerEntry& sle, uint256 const& r)
 {
     sle.setFieldH256(sfRollupRoot, r);
 }
-
-// =============================================================================
-// Lookup
-// =============================================================================
 
 std::shared_ptr<STLedgerEntry const>
 RollupState::read(ReadView const& view)
@@ -71,14 +60,6 @@ RollupState::peek(ApplyView& view)
     return view.peek(keylet::rollup_state());
 }
 
-// =============================================================================
-// Genesis creation
-// =============================================================================
-// Called exactly once — the first time any BatchRollup transaction reaches
-// doApply() and finds no RollupState SLE. Subsequent batches update the
-// existing SLE; they never call this path.
-// =============================================================================
-
 std::shared_ptr<STLedgerEntry>
 RollupState::createGenesis(
     ApplyView& view,
@@ -87,7 +68,6 @@ RollupState::createGenesis(
     auto const k = keylet::rollup_state();
     auto sle = std::make_shared<STLedgerEntry>(k);
 
-    // Invariants at genesis (before the first batch commit bumps the counter).
     sle->setFieldU32(sfBatchCounter, 0);
     sle->setFieldH256(sfRollupRoot, kGenesisRollupRoot());
     sle->setFieldVL(sfSequencerKey, sequencerPubKey);
@@ -96,6 +76,28 @@ RollupState::createGenesis(
 
     view.insert(sle);
     return sle;
+}
+
+std::unique_ptr<RollupMerkleTree>
+RollupState::loadTree(STLedgerEntry const& sle)
+{
+    auto const depth = sle.getFieldU8(sfRollupTreeDepth);
+    auto tree = std::make_unique<RollupMerkleTree>(depth);
+
+    if (sle.isFieldPresent(sfTreeFrontier))
+    {
+        auto const blob = sle.getFieldVL(sfTreeFrontier);
+        if (!blob.empty())
+            tree->deserialiseFrontier(blob);
+    }
+    return tree;
+}
+
+void
+RollupState::storeTree(STLedgerEntry& sle, RollupMerkleTree const& tree)
+{
+    auto const blob = tree.serialiseFrontier();
+    sle.setFieldVL(sfTreeFrontier, blob);
 }
 
 }  // namespace rollup

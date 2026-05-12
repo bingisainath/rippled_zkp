@@ -148,6 +148,27 @@ public:
     void
     clear();
 
+    // ---- Phase 4a: frontier serialisation -------------------------------
+    //
+    // Round-trip the tree's mutable state to a compact byte blob suitable
+    // for storage in the RollupState SLE. The serialised form contains
+    // exactly the data needed to reconstruct correct roots and auth paths
+    // for all subsequent append() and update_leaf() calls.
+    //
+    // Wire format (little-endian):
+    //   8 bytes  : next_position_
+    //   For each level L in [0, depth_]:
+    //     1 byte   : presence flag (1 if a frontier node exists at L, 0 otherwise)
+    //     if present:
+    //       8 bytes  : position within level
+    //       32 bytes : node hash
+    //
+    // Total max size: 8 + (depth_+1) * (1 + 8 + 32) = 8 + 33*41 = 1361 bytes
+    // for depth=32. Well within STI_VL limits.
+
+    std::vector<std::uint8_t> serialiseFrontier() const;
+    void deserialiseFrontier(std::vector<std::uint8_t> const& blob);
+
 private:
     // --- internal hash --------------------------------------------------------
     //
