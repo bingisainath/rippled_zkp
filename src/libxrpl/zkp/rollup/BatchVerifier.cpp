@@ -1,6 +1,18 @@
 //------------------------------------------------------------------------------
 /*
-    Phase 4a — BatchVerifier (class BatchRollup).
+    Phase 4b — BatchVerifier (class BatchRollup).
+
+    Changes from Phase 4a:
+      1. verifyBatchProof() now calls RollupProver::verifyEntry against the
+         PoseidonCircuit verification key, eight times — once per entry.
+         Phase 4a's ZkProver::verifyProof shortcut is removed; ZKProver.h
+         is no longer included from this translation unit.
+      2. The eight per-entry Groth16 proofs are unpacked from the
+         sfBatchProof blob's `proof` field via fixed-size 192-byte slots
+         (kEntryProofSlotBytes). No wire-format change vs Phase 1/4a; the
+         split is internal to this file and to RollupSequencer.
+      3. Preflight gains an explicit RollupProver::isInitialized() guard
+         alongside the existing RollupModule::isStarted() guard.
 */
 //==============================================================================
 
@@ -13,50 +25,85 @@
 #include <libxrpl/zkp/rollup/RollupProver.h>
 #include <libxrpl/zkp/rollup/RollupState.h>
 
-#include <libxrpl/zkp/circuits/MerkleCircuit.h>  // for uint256ToFieldElement
-#include <libxrpl/zkp/ZKProver.h>                // proven verifyProof entry point
-
-#include <xrpl/basics/Slice.h>
-#include <xrpl/protocol/Feature.h>
-#include <xrpl/protocol/Indexes.h>
-#include <xrpl/protocol/PublicKey.h>
-#include <xrpl/protocol/STAccount.h>
-#include <xrpl/protocol/TER.h>
 #include <xrpld/app/tx/detail/Transactor.h>
 #include <xrpld/ledger/View.h>
 
+#include <xrpl/basics/Slice.h>
+#include <xrpl/protocol/AccountID.h>
+#include <xrpl/protocol/Feature.h>
+#include <xrpl/protocol/Indexes.h>
+#include <xrpl/protocol/PublicKey.h>
+#include <xrpl/protocol/STAmount.h>
+#include <xrpl/protocol/STVector256.h>
+#include <xrpl/protocol/Sign.h>
+#include <xrpl/protocol/TER.h>
+#include <xrpl/protocol/digest.h>
+
 #include <set>
+#include <vector>
 
 namespace ripple {
 
 namespace {
 
-constexpr std::size_t kMaxBatchBlobBytes = 1u << 20;
-constexpr std::size_t kBatchSize         = 8;
+constexpr std::size_t kMaxBatchBlobBytes  = 1u << 20;  // 1 MiB
+constexpr std::size_t kBatchSize          = 8;
 
-// Phase 4a integration shortcut: we have a real Groth16 proof inside
-// `bp.proof`. The proper Phase 4b verifier will take a BatchProof
-// and call RollupProver::verifyProof against the full N=8 public-input
-// vector. Here we route through the existing ZkProver verifier, which
-// takes (proof, anchor, nullifier, value_commitment) and is known to
-// link cleanly. The cryptographic check is real; only the public-input
-// packing is single-note. This is an explicit Phase 4a deferral and
-// will be tightened in Phase 4b's RollupSequencer integration.
+// Fixed slot size for each per-entry Groth16 proof inside sfBatchProof.proof.
+// Phase 2 measured the serialised proof at ~137 bytes; 192 gives headroom
+// for libsnark version drift without changing the slot layout. MUST match
+// RollupSequencer::assembleBatch()'s slot size.
+constexpr std::size_t kEntryProofSlotBytes = 192;
+constexpr std::size_t kTotalProofBytes     = kBatchSize * kEntryProofSlotBytes;
+
+// Split the concatenated sfBatchProof.proof field into the eight per-entry
+// proof byte vectors. Returns false on size mismatch.
+//
+// Each slot is zero-padded at the end. libsnark's r1cs_gg_ppzksnark_proof
+// serializer reads a fixed structure of three group elements, so trailing
+// zeros in the slot are ignored by the deserializer.
+bool
+splitEntryProofs(
+    zkp::rollup::BatchProof const& bp,
+    std::vector<std::vector<unsigned char>>& out)
+{
+    out.clear();
+    if (bp.proof.size() != kTotalProofBytes)
+        return false;
+    out.reserve(kBatchSize);
+    auto it = bp.proof.begin();
+    for (std::size_t i = 0; i < kBatchSize; ++i)
+    {
+        out.emplace_back(it, it + kEntryProofSlotBytes);
+        it += kEntryProofSlotBytes;
+    }
+    return true;
+}
+
+// Phase 4b: verify all eight per-entry Poseidon proofs against the
+// PoseidonCircuit verification key. Returns true iff every entry's proof
+// satisfies its (prevRoot, newRoot, nullifier, value) public-input vector.
+// Short-circuits on the first failure.
 bool
 verifyBatchProof(zkp::rollup::BatchProof const& bp)
 {
-    if (bp.entries.empty() || bp.proof.empty())
+    using namespace zkp::rollup;
+
+    if (!RollupProver::isInitialized())
+        return false;
+    if (bp.entries.size() != kBatchSize)
         return false;
 
-    auto const anchor =
-        zkp::MerkleCircuit::uint256ToFieldElement(bp.prevRoot);
-    auto const nullifier =
-        zkp::MerkleCircuit::uint256ToFieldElement(bp.entries.front().nullifier);
-    auto const value_commitment =
-        zkp::MerkleCircuit::uint256ToFieldElement(bp.newRoot);
+    std::vector<std::vector<unsigned char>> perEntryProofs;
+    if (!splitEntryProofs(bp, perEntryProofs))
+        return false;
 
-    return zkp::ZkProver::verifyProof(
-        bp.proof, anchor, nullifier, value_commitment);
+    for (std::size_t i = 0; i < kBatchSize; ++i)
+    {
+        if (!RollupProver::verifyEntry(bp, i, perEntryProofs[i]))
+            return false;
+    }
+    return true;
 }
 
 }  // anonymous namespace
@@ -69,7 +116,14 @@ BatchRollup::preflight(PreflightContext const& ctx)
     if (!ctx.rules.enabled(featureZKRollup))
         return temDISABLED;
 
+    // Phase 4a: module bootstrap guard.
     if (!RollupModule::isStarted())
+        return temDISABLED;
+
+    // Phase 4b: explicit prover-keys guard. Should always agree with
+    // RollupModule::isStarted() but check both for defence in depth — a
+    // shutdown race between the two flags is otherwise possible.
+    if (!RollupProver::isInitialized())
         return temDISABLED;
 
     if (auto const ret = preflight1(ctx); !isTesSuccess(ret))
@@ -108,6 +162,13 @@ BatchRollup::preflight(PreflightContext const& ctx)
 
     if (tx.getFieldH256(sfPrevRoot) != bp.prevRoot ||
         tx.getFieldH256(sfRollupRoot) != bp.newRoot)
+        return temMALFORMED;
+
+    // Phase 4b: enforce the fixed 8 * 192-byte proof layout at preflight
+    // so a malformed-size blob fails fast (before preclaim spends pairing
+    // cycles). Tampered byte content is caught in preclaim by the
+    // per-entry Groth16 check.
+    if (bp.proof.size() != kTotalProofBytes)
         return temMALFORMED;
 
     auto const pubKeyBlob = tx.getFieldVL(sfSequencerPubKey);
@@ -153,15 +214,20 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
         expectedBatchId  = sle->getFieldU32(sfBatchCounter) + 1;
     }
 
+    // Root-chain invariant: this batch must start where the last one ended.
     if (bp.prevRoot != expectedPrevRoot)
         return tecFAILED_PROCESSING;
 
+    // batchId must be strictly the next one.
     if (bp.batchId != expectedBatchId)
         return temMALFORMED;
 
+    // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
     if (!verifyBatchProof(bp))
         return temBAD_PROOF;
 
+    // In-batch nullifier uniqueness. Cheap; do it before walking the
+    // NullifierStore.
     std::set<uint256> seenInBatch;
     for (auto const& entry : bp.entries)
     {
@@ -169,12 +235,14 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
             return temBAD_PROOF;
     }
 
+    // Chain-level nullifier uniqueness.
     for (auto const& entry : bp.entries)
     {
         if (NullifierStore::contains(ctx.view, entry.nullifier))
             return tecUNFUNDED;
     }
 
+    // Pool solvency check for withdrawals.
     std::int64_t totalWithdrawal = 0;
     for (auto const& entry : bp.entries)
     {
@@ -227,6 +295,10 @@ BatchRollup::doApply()
         tree->update_leaf(baseIndex + i, entry.commitment);
     }
 
+    // Phase 4a root-replay cross-check: the sequencer's declared newRoot
+    // must equal what the on-chain replay computes. This is what lets the
+    // eight per-entry Phase 4b proofs share (prevRoot, newRoot) anchors
+    // without an in-circuit aggregation step.
     if (tree->root() != bp.newRoot)
         return tefINTERNAL;
 

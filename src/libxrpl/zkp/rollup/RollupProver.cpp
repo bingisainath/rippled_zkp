@@ -3,6 +3,9 @@
 
 #include "RollupProver.h"
 
+#include <libxrpl/zkp/circuits/MerkleCircuit.h>  // uint256ToFieldElement helper
+
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -226,6 +229,80 @@ RollupProver::verifyProof(RollupProofData const& proof_data)
                   << std::endl;
         return false;
     }
+}
+
+// ----------------------------------------------------------------------------
+// Phase 4b: per-entry batch helpers
+// ----------------------------------------------------------------------------
+
+bool
+RollupProver::isInitialized()
+{
+    return initialised_;
+}
+
+FieldT
+RollupProver::uint256ToField(uint256 const& v)
+{
+    // Delegate to the existing helper so the field-mapping convention is
+    // identical to what PoseidonCircuit's public-input allocation expects.
+    return MerkleCircuit::uint256ToFieldElement(v);
+}
+
+bool
+RollupProver::verifyEntryPublicInputs(
+    FieldT const& prev_root,
+    FieldT const& new_root,
+    FieldT const& nullifier,
+    FieldT const& value_pub,
+    std::vector<unsigned char> const& proof_bytes)
+{
+    RollupProofData pd;
+    pd.proof_bytes = proof_bytes;
+    pd.anchor      = prev_root;
+    pd.new_anchor  = new_root;
+    pd.nullifier   = nullifier;
+    pd.value_pub   = value_pub;
+    return verifyProof(pd);
+}
+
+bool
+RollupProver::verifyEntry(
+    BatchProof const& bp,
+    std::size_t entryIndex,
+    std::vector<unsigned char> const& entryProof)
+{
+    if (!isInitialized())
+    {
+        std::cerr << "[RollupProver] verifyEntry: not initialised"
+                  << std::endl;
+        return false;
+    }
+    if (entryIndex >= bp.entries.size())
+        return false;
+    if (entryProof.empty())
+        return false;
+
+    auto const& e = bp.entries[entryIndex];
+
+    // Pack public inputs in the order PoseidonCircuit allocates them:
+    //   anchor      = prevRoot           (this entry's input-tree root)
+    //   new_anchor  = newRoot            (this entry's output-tree root)
+    //   nullifier   = e.nullifier        (Poseidon(ask, rho_old))
+    //   value_pub   = FieldT(e.value)    (the transferred drops, public)
+    //
+    // All eight entries in the batch share prevRoot/newRoot. That's the
+    // root-chain invariant: each batch's eight transitions advance the tree
+    // monotonically from sfPrevRoot to sfRollupRoot. The doApply() replay
+    // (Phase 4a) cross-checks that the eight Poseidon updates produce
+    // exactly sfRollupRoot — so the verifier can trust the anchors as
+    // declared without verifying root computation in-circuit again.
+    return verifyEntryPublicInputs(
+        uint256ToField(bp.prevRoot),
+        uint256ToField(bp.newRoot),
+        uint256ToField(e.nullifier),
+        FieldT(e.value),
+        entryProof);
 }
 
 std::size_t
