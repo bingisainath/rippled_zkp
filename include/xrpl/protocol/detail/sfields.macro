@@ -416,3 +416,4 @@ TYPED_SFIELD(sfBatchId,           UINT32,  47)
 TYPED_SFIELD(sfTxCount,           UINT32,  49)
 TYPED_SFIELD(sfBatchCounter,      UINT32,  78)
 TYPED_SFIELD(sfRollupTreeDepth,   UINT8,    6)  // renamed from sfTreeDepth
+TYPED_SFIELD(sfTreeFrontier,    VL,    37)   // Phase 4a: serialised RollupMerkleTree frontier
