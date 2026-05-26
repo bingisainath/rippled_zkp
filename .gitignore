@@ -118,3 +118,6 @@ bld.rippled/
 *.bak.*
 *.placeholder
 *.placeholder.*
+CMakeCache.txt
+CMakeFiles/
+*.cmak
