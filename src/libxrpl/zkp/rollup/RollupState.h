@@ -26,14 +26,15 @@ namespace rollup {
 
 class RollupMerkleTree;
 
-constexpr std::uint8_t kRollupTreeDepth = 32;
+constexpr std::uint8_t  kRollupTreeDepth = 32;
+constexpr std::size_t   kRollupBatchSize  = 8;
 
-inline uint256 const&
-kGenesisRollupRoot()
-{
-    static uint256 const sentinel{};  // all zeros
-    return sentinel;
-}
+// Root of the empty Poseidon Merkle tree pre-loaded with 8 genesis null-notes
+// (createRandom(0, seed) for seed=0..7). This is the prevRoot the sequencer
+// must use for the first batch, and the value preclaim checks when no
+// RollupState SLE exists yet.
+uint256 const&
+kGenesisRollupRoot();
 
 class RollupState
 {

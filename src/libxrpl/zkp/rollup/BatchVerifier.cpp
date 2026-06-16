@@ -39,6 +39,8 @@
 #include <xrpl/protocol/TER.h>
 #include <xrpl/protocol/digest.h>
 
+#include <xrpl/basics/Log.h>
+
 #include <set>
 #include <vector>
 
@@ -223,8 +225,15 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
         return temMALFORMED;
 
     // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
+    JLOG(ctx.j.info()) << "BatchRollup: preclaim running Groth16 verification ("
+                       << kBatchSize << " entries)";
     if (!verifyBatchProof(bp))
+    {
+        JLOG(ctx.j.warn()) << "BatchRollup: verifyBatchProof FAILED → temBAD_PROOF";
         return temBAD_PROOF;
+    }
+    JLOG(ctx.j.info()) << "BatchRollup: all " << kBatchSize
+                       << " Groth16 proofs verified";
 
     // In-batch nullifier uniqueness. Cheap; do it before walking the
     // NullifierStore.

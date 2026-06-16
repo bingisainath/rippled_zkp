@@ -218,3 +218,22 @@ if(xrpld)
       PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
   endif()
 endif()
+
+# ── gen_batch_blob — generates a valid BatchRollup sfBatchProof blob ─────────
+# Used by rollup_demo.sh to produce a tesSUCCESS submission against the live
+# standalone node. Only built when xrpld is enabled (same link deps as rippled).
+if(xrpld)
+  add_executable(gen_batch_blob
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/gen_batch_blob.cpp
+  )
+  target_include_directories(gen_batch_blob
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(gen_batch_blob
+    Ripple::boost
+    Ripple::opts
+    Ripple::libs
+    xrpl.libxrpl
+  )
+endif()

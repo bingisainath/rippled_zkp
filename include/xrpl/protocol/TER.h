@@ -142,9 +142,9 @@ enum TEMcodes : TERUnderlyingType {
 
     temBAD_TRANSFER_FEE,
 
-    temBAD_PROOF = -283,
-    temINVALID_PROOF = -284,
-    temDUPLICATE_NULLIFIER = -285,
+    temBAD_PROOF = -250,
+    temINVALID_PROOF = -249,
+    temDUPLICATE_NULLIFIER = -248,
 };
 
 //------------------------------------------------------------------------------
