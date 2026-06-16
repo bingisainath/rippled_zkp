@@ -138,9 +138,9 @@ public:
             *pb_, ask_packed_, rho_, nullifier_, "nf");
         nf_gadget_->generate_r1cs_constraints();
 
-        // ===== 6. value_pub == value =====
+        // ===== 6. value_pub == new_value (deposited amount is public) =====
         pb_->add_r1cs_constraint(
-            libsnark::r1cs_constraint<FieldT>(value_pub_ - value_, 1, 0),
+            libsnark::r1cs_constraint<FieldT>(value_pub_ - new_value_, 1, 0),
             "value_pub_eq");
 
         // ===== 7. New commitment (same structure, fresh rho/r) =====
@@ -261,7 +261,7 @@ public:
         // Public inputs
         pb_->val(anchor_) = prev_root;
         pb_->val(new_anchor_) = new_root;
-        pb_->val(value_pub_) = FieldT(old_note.value);
+        pb_->val(value_pub_) = FieldT(new_note.value);
 
         // Old note privates
         pb_->val(value_) = FieldT(old_note.value);

@@ -7,6 +7,10 @@
 #include <libxrpl/zkp/rollup/RollupState.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>
 #include <libxrpl/zkp/rollup/RollupMerkleTree.h>
+#include <libxrpl/zkp/rollup/RollupNote.h>
+#include <libxrpl/zkp/rollup/BabyJubjub.h>
+#include <libxrpl/zkp/rollup/PoseidonHash.h>
+#include <libxrpl/zkp/circuits/MerkleCircuit.h>
 
 #include <xrpl/basics/Slice.h>
 #include <xrpl/protocol/SField.h>
@@ -17,6 +21,27 @@
 namespace ripple {
 namespace zkp {
 namespace rollup {
+
+// Genesis root: root of a depth-32 Poseidon tree pre-seeded with 8 null-note
+// commitments (one per genesis leaf slot). Seeds 0..7 produce deterministic,
+// distinct notes so their nullifiers are all unique (avoiding in-batch
+// duplicate rejection on the first real batch).
+uint256 const&
+kGenesisRollupRoot()
+{
+    static uint256 const root = []() {
+        PoseidonHash::initialize();
+        BabyJubjub::initialize();
+        RollupMerkleTree tree(kRollupTreeDepth);
+        for (std::uint64_t i = 0; i < kRollupBatchSize; ++i)
+        {
+            RollupNote n = RollupNote::createRandom(0, i);
+            tree.append(PoseidonHash::fieldToUint256(n.commitment()));
+        }
+        return tree.root();
+    }();
+    return root;
+}
 
 std::uint32_t
 RollupState::batchCounter(STLedgerEntry const& sle)
@@ -73,6 +98,16 @@ RollupState::createGenesis(
     sle->setFieldVL(sfSequencerKey, sequencerPubKey);
     sle->setFieldU8(sfRollupTreeDepth, kRollupTreeDepth);
     sle->setFieldU32(sfOwnerCount, 0);
+
+    // Pre-load the Merkle tree with the 8 genesis null-note commitments so
+    // that doApply()'s update_leaf(0..7) finds existing leaves to update.
+    RollupMerkleTree tree(kRollupTreeDepth);
+    for (std::uint64_t i = 0; i < kRollupBatchSize; ++i)
+    {
+        RollupNote n = RollupNote::createRandom(0, i);
+        tree.append(PoseidonHash::fieldToUint256(n.commitment()));
+    }
+    storeTree(*sle, tree);
 
     view.insert(sle);
     return sle;

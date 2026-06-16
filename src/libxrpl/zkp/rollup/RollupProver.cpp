@@ -3,7 +3,7 @@
 
 #include "RollupProver.h"
 
-#include <libxrpl/zkp/circuits/MerkleCircuit.h>  // uint256ToFieldElement helper
+#include <libxrpl/zkp/rollup/PoseidonHash.h>
 
 #include <cstring>
 #include <fstream>
@@ -50,6 +50,15 @@ RollupProver::initialize(std::string const& key_path, std::size_t tree_depth)
                      "one-time setup, ~30–60s on first build)." << std::endl;
         generateKeys(key_path, tree_depth_);
         saveKeys(key_path);
+        std::cout << "[RollupProver] Generated Groth16 keys at " << key_path
+                  << " (" << proving_key_->constraint_system.num_constraints()
+                  << " constraints)" << std::endl;
+    }
+    else
+    {
+        std::cout << "[RollupProver] Loaded Groth16 keys from " << key_path
+                  << " (" << proving_key_->constraint_system.num_constraints()
+                  << " constraints)" << std::endl;
     }
     initialised_ = true;
 }
@@ -199,7 +208,7 @@ RollupProver::createProof(
     out.anchor = prev_root;
     out.new_anchor = new_root;
     out.nullifier = old_note.nullifier();
-    out.value_pub = FieldT(old_note.value);
+    out.value_pub = FieldT(new_note.value);
     return out;
 }
 
@@ -244,9 +253,7 @@ RollupProver::isInitialized()
 FieldT
 RollupProver::uint256ToField(uint256 const& v)
 {
-    // Delegate to the existing helper so the field-mapping convention is
-    // identical to what PoseidonCircuit's public-input allocation expects.
-    return MerkleCircuit::uint256ToFieldElement(v);
+    return PoseidonHash::uint256ToField(v);
 }
 
 bool
