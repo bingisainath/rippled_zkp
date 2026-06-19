@@ -330,7 +330,9 @@ class BatchVerifier_test : public beast::unit_test::suite
         Env env(*this, supported_amendments() | featureZKRollup);
         auto submitter = freshSubmitter(env);
 
-        auto sb = makeMockSignedBatch(5, uint256{});  // should start at 1
+        // prevRoot must equal kGenesisRollupRoot() for preclaim to reach the
+        // batchId check; uint256{} short-circuits with tecFAILED_PROCESSING.
+        auto sb = makeMockSignedBatch(5, zkp::rollup::kGenesisRollupRoot());
         env(batchRollupTx(submitter, sb), ter(temMALFORMED));
     }
 
@@ -348,7 +350,7 @@ class BatchVerifier_test : public beast::unit_test::suite
         Env env(*this, supported_amendments() | featureZKRollup);
         auto submitter = freshSubmitter(env);
 
-        auto sb = makeRealSignedBatch(1, uint256{});
+        auto sb = makeRealSignedBatch(1, zkp::rollup::kGenesisRollupRoot());
 
         // Flip a byte deep inside slot 3 to corrupt one entry's proof.
         constexpr std::size_t targetEntry = 3;

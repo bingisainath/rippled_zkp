@@ -224,34 +224,32 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
     if (bp.batchId != expectedBatchId)
         return temMALFORMED;
 
-    // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
-    JLOG(ctx.j.info()) << "BatchRollup: preclaim running Groth16 verification ("
-                       << kBatchSize << " entries)";
-    if (!verifyBatchProof(bp))
-    {
-        JLOG(ctx.j.warn()) << "BatchRollup: verifyBatchProof FAILED → temBAD_PROOF";
-        return temBAD_PROOF;
-    }
-    JLOG(ctx.j.info()) << "BatchRollup: all " << kBatchSize
-                       << " Groth16 proofs verified";
-
-    // In-batch nullifier uniqueness. Cheap; do it before walking the
-    // NullifierStore.
+    // In-batch nullifier uniqueness — cheap O(n log n); runs before Groth16
+    // so a tampered batch with duplicate nullifiers fails fast.
     std::set<uint256> seenInBatch;
     for (auto const& entry : bp.entries)
     {
         if (!seenInBatch.insert(entry.nullifier).second)
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup: duplicate nullifier in batch → temBAD_PROOF";
             return temBAD_PROOF;
+        }
     }
 
-    // Chain-level nullifier uniqueness.
+    // Chain-level nullifier uniqueness — prevents cross-batch double-spend.
+    // Runs before Groth16 so a replay attempt is rejected without pairing cost.
     for (auto const& entry : bp.entries)
     {
         if (NullifierStore::contains(ctx.view, entry.nullifier))
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup: nullifier already spent → tecUNFUNDED";
             return tecUNFUNDED;
+        }
     }
 
-    // Pool solvency check for withdrawals.
+    // Pool solvency check for withdrawals — runs before Groth16 for fail-fast.
     std::int64_t totalWithdrawal = 0;
     for (auto const& entry : bp.entries)
     {
@@ -267,6 +265,19 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
         if (poolBalance < totalWithdrawal)
             return tecINSUF_RESERVE_LINE;
     }
+
+    // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
+    // This is the most expensive check (~pairing per entry); all cheap policy
+    // checks above must pass first.
+    JLOG(ctx.j.info()) << "BatchRollup: preclaim running Groth16 verification ("
+                       << kBatchSize << " entries)";
+    if (!verifyBatchProof(bp))
+    {
+        JLOG(ctx.j.warn()) << "BatchRollup: verifyBatchProof FAILED → temBAD_PROOF";
+        return temBAD_PROOF;
+    }
+    JLOG(ctx.j.info()) << "BatchRollup: all " << kBatchSize
+                       << " Groth16 proofs verified";
 
     return tesSUCCESS;
 }
@@ -295,8 +306,11 @@ BatchRollup::doApply()
 
     auto tree = RollupState::loadTree(*sle);   // unique_ptr<RollupMerkleTree>
 
-    auto const baseIndex =
-        static_cast<std::size_t>(sle->getFieldU32(sfBatchCounter)) * kBatchSize;
+    // All batches update the same 8 fixed leaf slots (0..7). The PoseidonCircuit
+    // proves old→new at a fixed leaf_pos; it does not encode a batch-offset.
+    // Using BatchCounter*kBatchSize would send batch 2 to positions 8..15,
+    // exceeding tree.size()=8 and throwing std::out_of_range in update_leaf.
+    constexpr std::size_t baseIndex = 0;
 
     for (std::size_t i = 0; i < bp.entries.size(); ++i)
     {
@@ -322,6 +336,14 @@ BatchRollup::doApply()
     if (sle->isFieldPresent(sfBalance))
         poolDrops = sle->getFieldAmount(sfBalance).xrp().drops();
 
+    // The rollup pool balance is stored in a custom SLE, invisible to
+    // rippled's XRP supply invariant. For withdrawals, we must debit an
+    // actual AccountRoot so the invariant sees a balanced XRP transfer.
+    // The TX submitter's account acts as the bridge pool in this prototype.
+    auto submitterSle = view.peek(keylet::account(tx.getAccountID(sfAccount)));
+    if (!submitterSle)
+        return tefINTERNAL;
+
     for (auto const& entry : bp.entries)
     {
         if (entry.txType == RollupTxType::Deposit)
@@ -331,6 +353,12 @@ BatchRollup::doApply()
         else
         {
             poolDrops -= static_cast<std::int64_t>(entry.value);
+
+            // Debit the submitter's account to balance the XRP supply invariant.
+            auto subBal = submitterSle->getFieldAmount(sfBalance);
+            subBal -= STAmount(XRPAmount(entry.value));
+            submitterSle->setFieldAmount(sfBalance, subBal);
+            view.update(submitterSle);
 
             auto destSle = view.peek(keylet::account(entry.destination));
             if (!destSle)
