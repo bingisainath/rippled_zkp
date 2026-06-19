@@ -466,6 +466,8 @@ LEDGER_ENTRY(ltROLLUP_STATE,   0x0084, RollupState,   ({
     {sfSequencerKey,    soeREQUIRED},
     {sfRollupTreeDepth, soeREQUIRED},
     {sfOwnerCount,      soeREQUIRED},
+    {sfBalance,         soeOPTIONAL},
+    {sfTreeFrontier,    soeOPTIONAL},
 }))
 LEDGER_ENTRY(ltNULLIFIER_PAGE, 0x0085, NullifierPage, ({
     {sfHashes,     soeREQUIRED},  // Vector256 of Poseidon nullifiers

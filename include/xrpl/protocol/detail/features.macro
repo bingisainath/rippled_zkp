@@ -122,4 +122,4 @@ XRPL_FEATURE(ZeroKnowledgePrivacy,Supported::yes,  VoteBehavior::DefaultNo)
 
 // ZK-Rollup feature flag (Phase 1). MUST be separate from
 // featureZeroKnowledgePrivacy — see v2.2 §10.4.
-XRPL_FEATURE(ZKRollup, Supported::yes, VoteBehavior::DefaultNo)
+XRPL_FEATURE(ZKRollup, Supported::yes, VoteBehavior::DefaultYes)

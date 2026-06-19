@@ -734,17 +734,13 @@ FieldT MerkleCircuit::bitsToFieldElement(const std::vector<bool>& bits) {
 }
 
 std::vector<bool> MerkleCircuit::fieldElementToBits(const FieldT& element) {
-    std::vector<bool> bits(253);
-    FieldT temp = element;
-    FieldT two = FieldT(2);
-    
-    for (size_t i = 0; i < 253; ++i) {
-        FieldT quotient = temp * two.inverse();
-        FieldT remainder = temp - (quotient + quotient);
-        
-        bits[i] = (remainder == FieldT::one());
-        temp = quotient;
-    }
+    // as_bigint() converts from Montgomery form to standard integer representation.
+    // test_bit(i) returns the i-th bit of that integer (LSB-first), which is
+    // the inverse of bitsToFieldElement's sum(bits[i] * 2^i) convention.
+    auto const bigint = element.as_bigint();
+    std::vector<bool> bits(253, false);
+    for (size_t i = 0; i < 253; ++i)
+        bits[i] = bigint.test_bit(i);
     return bits;
 }
 

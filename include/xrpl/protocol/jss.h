@@ -745,6 +745,7 @@ JSS(RollupRoot);       // sfRollupRoot — Phase 1 rollup state
 JSS(TxCount);          // sfTxCount — Phase 1 rollup batch size
 JSS(SequencerPubKey);  // sfSequencerPubKey — Phase 1 rollup auth
 JSS(nullifier);
+JSS(TreeFrontier);
 // clang-format on
 
 #pragma push_macro("TRANSACTION")

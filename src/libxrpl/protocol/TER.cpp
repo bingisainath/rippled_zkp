@@ -208,6 +208,9 @@ transResults()
         MAKE_ERROR(temARRAY_EMPTY,               "Malformed: Array is empty."),
         MAKE_ERROR(temARRAY_TOO_LARGE,           "Malformed: Array is too large."),
         MAKE_ERROR(temBAD_TRANSFER_FEE,          "Malformed: Transfer fee is outside valid range."),
+        MAKE_ERROR(temBAD_PROOF,                 "Malformed: ZK proof verification failed."),
+        MAKE_ERROR(temINVALID_PROOF,             "Malformed: Invalid ZK proof."),
+        MAKE_ERROR(temDUPLICATE_NULLIFIER,       "Malformed: Duplicate nullifier in batch."),
 
         MAKE_ERROR(terRETRY,                  "Retry transaction."),
         MAKE_ERROR(terFUNDS_SPENT,            "DEPRECATED."),

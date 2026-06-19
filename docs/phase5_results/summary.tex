@@ -1,0 +1,15 @@
+\begin{table}[t]
+  \centering
+  \caption{Phase 5 microbenchmarks on \texttt{vma77.scss.tcd.ie} (Ubuntu 22.04, GCC-13, single core, Groth16 keys cached). Prover and verifier times measured directly via \texttt{RollupProver}; on-chain pipeline measured end-to-end via \texttt{jtx::Env} along the Phase 4b tampered-rejection path; baseline is eight individual \texttt{Payment} transactions through the same \texttt{Env}.}
+  \label{tab:phase5-benchmarks}
+  \begin{tabular}{lrrr}
+    \toprule
+    Scenario & Mean & Std.\ dev. & Range \\
+    \midrule
+    Prover (createProof) (ms) & 4938.5 & 40.6 & 4897.2--4997.5 \\
+    Verifier (verifyProof) (us) & 5844 & 103 & 5740--6007 \\
+    On-chain pipeline (preflight+preclaim, N=8) (ms) & 19.3 & 6.5 & 7.8--23.1 \\
+    Baseline (8x Payment) (ms) & 13.6 & 3.8 & 10.5--19.4 \\
+    \bottomrule
+  \end{tabular}
+\end{table}

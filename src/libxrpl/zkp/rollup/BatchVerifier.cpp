@@ -1,210 +1,214 @@
 //------------------------------------------------------------------------------
 /*
-    Phase 1 — Foundation: BatchVerifier transactor skeleton.
+    Phase 4b — BatchVerifier (class BatchRollup).
 
-    Three-phase pipeline (v2.2 Fig 5):
-        preflight  — stateless
-        preclaim   — read-only ledger + mock proof verify
-        doApply    — atomic state mutation (counter + root only in Phase 1)
-
-    Models the structure of ZkDeposit::preflight/preclaim/doApply exactly,
-    but with the v2.2 corrections applied (§10.1–§10.9):
-      - gates on featureZKRollup (NOT featureZeroKnowledgePrivacy)
-      - uses STI_VL for sfBatchProof (NOT STI_ZKPROOF)
-      - key loading is out-of-scope here (fail-fast at preflight; Phase 4a
-        hooks RollupProver::isInitialized into a startup module, not lazy
-        init inside preclaim)
-      - keylets via shared header RollupKeylets.h (NOT per-file inline)
+    Changes from Phase 4a:
+      1. verifyBatchProof() now calls RollupProver::verifyEntry against the
+         PoseidonCircuit verification key, eight times — once per entry.
+         Phase 4a's ZkProver::verifyProof shortcut is removed; ZKProver.h
+         is no longer included from this translation unit.
+      2. The eight per-entry Groth16 proofs are unpacked from the
+         sfBatchProof blob's `proof` field via fixed-size 192-byte slots
+         (kEntryProofSlotBytes). No wire-format change vs Phase 1/4a; the
+         split is internal to this file and to RollupSequencer.
+      3. Preflight gains an explicit RollupProver::isInitialized() guard
+         alongside the existing RollupModule::isStarted() guard.
 */
 //==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchVerifier.h>
 #include <libxrpl/zkp/rollup/BatchProof.h>
+#include <libxrpl/zkp/rollup/NullifierStore.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>
+#include <libxrpl/zkp/rollup/RollupMerkleTree.h>
+#include <libxrpl/zkp/rollup/RollupModule.h>
+#include <libxrpl/zkp/rollup/RollupProver.h>
 #include <libxrpl/zkp/rollup/RollupState.h>
 
-#include <xrpl/basics/Log.h>
+#include <xrpld/app/tx/detail/Transactor.h>
+#include <xrpld/ledger/View.h>
+
 #include <xrpl/basics/Slice.h>
+#include <xrpl/protocol/AccountID.h>
 #include <xrpl/protocol/Feature.h>
+#include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/PublicKey.h>
-#include <xrpl/protocol/STTx.h>
-#include <xrpl/protocol/TxFlags.h>
-#include <xrpl/protocol/jss.h>
-#include <xrpld/ledger/ApplyView.h>
+#include <xrpl/protocol/STAmount.h>
+#include <xrpl/protocol/STVector256.h>
+#include <xrpl/protocol/Sign.h>
+#include <xrpl/protocol/TER.h>
+#include <xrpl/protocol/digest.h>
+
+#include <xrpl/basics/Log.h>
+
+#include <set>
+#include <vector>
 
 namespace ripple {
 
-using zkp::rollup::BatchProof;
-using zkp::rollup::MAX_BATCH_BLOB_BYTES;
-using zkp::rollup::kGenesisRollupRoot;
+namespace {
 
-// =============================================================================
-// preflight  (stateless — no ledger access)
-// =============================================================================
+constexpr std::size_t kMaxBatchBlobBytes  = 1u << 20;  // 1 MiB
+constexpr std::size_t kBatchSize          = 8;
+
+// Fixed slot size for each per-entry Groth16 proof inside sfBatchProof.proof.
+// Phase 2 measured the serialised proof at ~137 bytes; 192 gives headroom
+// for libsnark version drift without changing the slot layout. MUST match
+// RollupSequencer::assembleBatch()'s slot size.
+constexpr std::size_t kEntryProofSlotBytes = 192;
+constexpr std::size_t kTotalProofBytes     = kBatchSize * kEntryProofSlotBytes;
+
+// Split the concatenated sfBatchProof.proof field into the eight per-entry
+// proof byte vectors. Returns false on size mismatch.
+//
+// Each slot is zero-padded at the end. libsnark's r1cs_gg_ppzksnark_proof
+// serializer reads a fixed structure of three group elements, so trailing
+// zeros in the slot are ignored by the deserializer.
+bool
+splitEntryProofs(
+    zkp::rollup::BatchProof const& bp,
+    std::vector<std::vector<unsigned char>>& out)
+{
+    out.clear();
+    if (bp.proof.size() != kTotalProofBytes)
+        return false;
+    out.reserve(kBatchSize);
+    auto it = bp.proof.begin();
+    for (std::size_t i = 0; i < kBatchSize; ++i)
+    {
+        out.emplace_back(it, it + kEntryProofSlotBytes);
+        it += kEntryProofSlotBytes;
+    }
+    return true;
+}
+
+// Phase 4b: verify all eight per-entry Poseidon proofs against the
+// PoseidonCircuit verification key. Returns true iff every entry's proof
+// satisfies its (prevRoot, newRoot, nullifier, value) public-input vector.
+// Short-circuits on the first failure.
+bool
+verifyBatchProof(zkp::rollup::BatchProof const& bp)
+{
+    using namespace zkp::rollup;
+
+    if (!RollupProver::isInitialized())
+        return false;
+    if (bp.entries.size() != kBatchSize)
+        return false;
+
+    std::vector<std::vector<unsigned char>> perEntryProofs;
+    if (!splitEntryProofs(bp, perEntryProofs))
+        return false;
+
+    for (std::size_t i = 0; i < kBatchSize; ++i)
+    {
+        if (!RollupProver::verifyEntry(bp, i, perEntryProofs[i]))
+            return false;
+    }
+    return true;
+}
+
+}  // anonymous namespace
 
 NotTEC
 BatchRollup::preflight(PreflightContext const& ctx)
 {
-    // ---- 1. Feature gate ------------------------------------------------
-    // v2.2 §10.4: MUST be featureZKRollup, NOT featureZeroKnowledgePrivacy.
-    // If you accidentally gate on the wrong flag every batch returns
-    // temDISABLED with no diagnostic — one of the most insidious bugs.
-    if (!ctx.rules.enabled(featureZKRollup))
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: featureZKRollup not enabled";
-        return temDISABLED;
-    }
+    using namespace zkp::rollup;
 
-    // ---- 2. Standard rippled preflight prerequisites --------------------
+    if (!ctx.rules.enabled(featureZKRollup))
+        return temDISABLED;
+
+    // Phase 4a: module bootstrap guard.
+    if (!RollupModule::isStarted())
+        return temDISABLED;
+
+    // Phase 4b: explicit prover-keys guard. Should always agree with
+    // RollupModule::isStarted() but check both for defence in depth — a
+    // shutdown race between the two flags is otherwise possible.
+    if (!RollupProver::isInitialized())
+        return temDISABLED;
+
     if (auto const ret = preflight1(ctx); !isTesSuccess(ret))
         return ret;
 
-    // ---- 3. Required fields present -------------------------------------
     auto const& tx = ctx.tx;
 
-    auto requireField = [&](SField const& f, char const* name) -> bool {
-        if (!tx.isFieldPresent(f))
-        {
-            JLOG(ctx.j.debug()) << "BatchVerifier: missing field " << name;
-            return false;
-        }
-        return true;
-    };
-    if (!requireField(sfBatchProof,       "sfBatchProof"))       return temMALFORMED;
-    if (!requireField(sfBatchId,          "sfBatchId"))          return temMALFORMED;
-    if (!requireField(sfPrevRoot,         "sfPrevRoot"))         return temMALFORMED;
-    if (!requireField(sfRollupRoot,       "sfRollupRoot"))       return temMALFORMED;
-    if (!requireField(sfTxCount,          "sfTxCount"))          return temMALFORMED;
-    if (!requireField(sfSequencerPubKey,  "sfSequencerPubKey"))  return temMALFORMED;
-
-    // ---- 4. Blob size guard (v2.2 §10.2) --------------------------------
-    // Model exactly on ZkDeposit.cpp's sfZKProof size check, but with the
-    // 1 MB rollup cap.
-    auto const blob = tx.getFieldVL(sfBatchProof);
-    if (blob.empty() || blob.size() > MAX_BATCH_BLOB_BYTES)
-    {
-        JLOG(ctx.j.debug())
-            << "BatchVerifier: invalid sfBatchProof size " << blob.size();
+    if (!tx.isFieldPresent(sfBatchProof) ||
+        !tx.isFieldPresent(sfBatchId) ||
+        !tx.isFieldPresent(sfPrevRoot) ||
+        !tx.isFieldPresent(sfRollupRoot) ||
+        !tx.isFieldPresent(sfTxCount) ||
+        !tx.isFieldPresent(sfSequencerPubKey))
         return temMALFORMED;
-    }
 
-    // ---- 5. Deserialize -------------------------------------------------
+    auto const& blob = tx.getFieldVL(sfBatchProof);
+    if (blob.empty() || blob.size() > kMaxBatchBlobBytes)
+        return temMALFORMED;
+
     bool ok = false;
-    BatchProof bp = BatchProof::deserialize(
-        std::vector<std::uint8_t>(blob.begin(), blob.end()), ok);
+    auto const bp = BatchProof::deserialize(blob, ok);
     if (!ok)
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: BatchProof deserialize failed";
         return temMALFORMED;
-    }
 
-    // ---- 6. Structural wellformedness -----------------------------------
     if (!bp.isWellFormed())
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: BatchProof not well-formed";
         return temMALFORMED;
-    }
 
-    // ---- 7. sfTxCount consistency (NEW check in v2.1, §Fig 5) -----------
-    // Security: prevents a batch that declares N=8 but only carries 5
-    // entries (or vice versa) from ever reaching preclaim.
     auto const declaredTxCount = tx.getFieldU32(sfTxCount);
-    if (declaredTxCount != bp.txCount
-        || declaredTxCount != bp.entries.size())
-    {
-        JLOG(ctx.j.debug())
-            << "BatchVerifier: sfTxCount mismatch (tx=" << declaredTxCount
-            << " blob.txCount=" << bp.txCount
-            << " entries=" << bp.entries.size() << ')';
+    if (declaredTxCount != bp.txCount ||
+        bp.entries.size() != bp.txCount)
         return temMALFORMED;
-    }
 
-    // ---- 8. batchId > 0 and matches blob --------------------------------
     auto const declaredBatchId = tx.getFieldU32(sfBatchId);
     if (declaredBatchId == 0 || declaredBatchId != bp.batchId)
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: invalid sfBatchId";
         return temMALFORMED;
-    }
 
-    // ---- 9/10. prevRoot / newRoot consistency between STTx and blob -----
-    if (tx.getFieldH256(sfPrevRoot) != bp.prevRoot)
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: sfPrevRoot mismatch (STTx vs blob)";
+    if (tx.getFieldH256(sfPrevRoot) != bp.prevRoot ||
+        tx.getFieldH256(sfRollupRoot) != bp.newRoot)
         return temMALFORMED;
-    }
-    if (tx.getFieldH256(sfRollupRoot) != bp.newRoot)
-    {
-        JLOG(ctx.j.debug()) << "BatchVerifier: sfRollupRoot mismatch (STTx vs blob)";
+
+    // Phase 4b: enforce the fixed 8 * 192-byte proof layout at preflight
+    // so a malformed-size blob fails fast (before preclaim spends pairing
+    // cycles). Tampered byte content is caught in preclaim by the
+    // per-entry Groth16 check.
+    if (bp.proof.size() != kTotalProofBytes)
         return temMALFORMED;
-    }
 
-    // ---- 11. Ed25519 signature verification over batchHash --------------
-    // The sequencer Ed25519-signs batchHash (off-chain SHA-256). The public
-    // key travels on the STTx in sfSequencerPubKey; the signature travels
-    // inside the blob in sequencerSig.
-    try
-    {
-        auto const pubKeyBlob = tx.getFieldVL(sfSequencerPubKey);
-        if (pubKeyBlob.empty())
-            return temMALFORMED;
+    auto const pubKeyBlob = tx.getFieldVL(sfSequencerPubKey);
+    if (pubKeyBlob.size() != 33)
+        return temBAD_SIGNATURE;
 
-        Slice const pkSlice(pubKeyBlob.data(), pubKeyBlob.size());
-        auto const pkType = publicKeyType(pkSlice);
-        if (!pkType || *pkType != KeyType::ed25519)
-        {
-            JLOG(ctx.j.debug())
-                << "BatchVerifier: sfSequencerPubKey not Ed25519";
-            return temMALFORMED;
-        }
+    auto const batchHash = bp.computeBatchHash();
+    PublicKey const pk{Slice(pubKeyBlob.data(), pubKeyBlob.size())};
+    if (!verify(
+            pk,
+            Slice(batchHash.data(), batchHash.size()),
+            Slice(bp.sequencerSig.data(), bp.sequencerSig.size()),
+            /*mustBeFullyCanonical=*/true))
+        return temBAD_SIGNATURE;
 
-        PublicKey const pk(pkSlice);
-
-        uint256 const batchHash = bp.computeBatchHash();
-        Slice const msg(batchHash.data(), batchHash.size());
-        Slice const sig(bp.sequencerSig.data(), bp.sequencerSig.size());
-
-        if (!verify(pk, msg, sig, /*mustBeFullyCanonical=*/false))
-        {
-            JLOG(ctx.j.debug())
-                << "BatchVerifier: sequencer signature verification failed";
-            return temBAD_SIGNATURE;
-        }
-    }
-    catch (std::exception const& e)
-    {
-        JLOG(ctx.j.warn())
-            << "BatchVerifier: exception during sig verify: " << e.what();
-        return temMALFORMED;
-    }
-
-    // ---- 12. Standard rippled sig / structure trailer -------------------
     return preflight2(ctx);
 }
-
-// =============================================================================
-// preclaim  (read-only ledger access; proof-verify stubbed via mock)
-// =============================================================================
 
 TER
 BatchRollup::preclaim(PreclaimContext const& ctx)
 {
-    auto const& tx = ctx.tx;
+    using namespace zkp::rollup;
 
-    auto const declaredPrevRoot = tx.getFieldH256(sfPrevRoot);
-    auto const declaredBatchId  = tx.getFieldU32(sfBatchId);
+    bool ok = false;
+    auto const bp = BatchProof::deserialize(
+        ctx.tx.getFieldVL(sfBatchProof), ok);
+    if (!ok)
+        return tefINTERNAL;
 
     auto const sle = ctx.view.read(keylet::rollup_state());
 
-    uint256 expectedPrevRoot;
+    uint256       expectedPrevRoot;
     std::uint32_t expectedBatchId = 0;
 
     if (!sle)
     {
-        // First-ever batch on this network. The RollupState SLE doesn't
-        // exist yet — doApply() will create it. Genesis invariants:
-        expectedPrevRoot = kGenesisRollupRoot();   // all-zero sentinel
-        expectedBatchId  = 1;                       // first batch
+        expectedPrevRoot = kGenesisRollupRoot();
+        expectedBatchId  = 1;
     }
     else
     {
@@ -212,108 +216,184 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
         expectedBatchId  = sle->getFieldU32(sfBatchCounter) + 1;
     }
 
-    if (declaredPrevRoot != expectedPrevRoot)
-    {
-        JLOG(ctx.j.warn())
-            << "BatchVerifier: prevRoot mismatch — sequencer must re-fetch "
-               "currentRoot and resubmit";
-        // Recoverable error — v2.2 §Fig 11 / Fig 7 "Rejection Scenario 5".
+    // Root-chain invariant: this batch must start where the last one ended.
+    if (bp.prevRoot != expectedPrevRoot)
         return tecFAILED_PROCESSING;
-    }
 
-    if (declaredBatchId != expectedBatchId)
-    {
-        JLOG(ctx.j.warn())
-            << "BatchVerifier: non-monotonic batchId (got " << declaredBatchId
-            << ", expected " << expectedBatchId << ')';
+    // batchId must be strictly the next one.
+    if (bp.batchId != expectedBatchId)
         return temMALFORMED;
+
+    // In-batch nullifier uniqueness — cheap O(n log n); runs before Groth16
+    // so a tampered batch with duplicate nullifiers fails fast.
+    std::set<uint256> seenInBatch;
+    for (auto const& entry : bp.entries)
+    {
+        if (!seenInBatch.insert(entry.nullifier).second)
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup: duplicate nullifier in batch → temBAD_PROOF";
+            return temBAD_PROOF;
+        }
     }
 
-    // --------- MOCK PROOF VERIFICATION (Phase 1 only) ---------------------
-    // In Phase 4a this is replaced with:
-    //     if (!zkp::rollup::RollupProver::verifyProof(bp))
-    //         return temBAD_PROOF;
-    //
-    // We do a defensive redeserialize here so the mock sees the same blob
-    // the real verifier will see — catches any discrepancy early.
-    auto const blob = tx.getFieldVL(sfBatchProof);
-    bool ok = false;
-    BatchProof const bp = BatchProof::deserialize(
-        std::vector<std::uint8_t>(blob.begin(), blob.end()), ok);
-    if (!ok)
-        return temMALFORMED;  // defensive — preflight should have caught this
-
-    if (!verifyProofMock(bp))
+    // Chain-level nullifier uniqueness — prevents cross-batch double-spend.
+    // Runs before Groth16 so a replay attempt is rejected without pairing cost.
+    for (auto const& entry : bp.entries)
     {
-        JLOG(ctx.j.warn()) << "BatchVerifier: mock proof verifier rejected";
+        if (NullifierStore::contains(ctx.view, entry.nullifier))
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup: nullifier already spent → tecUNFUNDED";
+            return tecUNFUNDED;
+        }
+    }
+
+    // Pool solvency check for withdrawals — runs before Groth16 for fail-fast.
+    std::int64_t totalWithdrawal = 0;
+    for (auto const& entry : bp.entries)
+    {
+        if (entry.txType == RollupTxType::Withdraw)
+            totalWithdrawal += static_cast<std::int64_t>(entry.value);
+    }
+    if (totalWithdrawal > 0)
+    {
+        std::int64_t poolBalance = 0;
+        if (sle && sle->isFieldPresent(sfBalance))
+            poolBalance =
+                sle->getFieldAmount(sfBalance).xrp().drops();
+        if (poolBalance < totalWithdrawal)
+            return tecINSUF_RESERVE_LINE;
+    }
+
+    // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
+    // This is the most expensive check (~pairing per entry); all cheap policy
+    // checks above must pass first.
+    JLOG(ctx.j.info()) << "BatchRollup: preclaim running Groth16 verification ("
+                       << kBatchSize << " entries)";
+    if (!verifyBatchProof(bp))
+    {
+        JLOG(ctx.j.warn()) << "BatchRollup: verifyBatchProof FAILED → temBAD_PROOF";
         return temBAD_PROOF;
     }
+    JLOG(ctx.j.info()) << "BatchRollup: all " << kBatchSize
+                       << " Groth16 proofs verified";
 
     return tesSUCCESS;
 }
-
-// =============================================================================
-// doApply  (atomic state mutation — counter + root ONLY in Phase 1)
-// =============================================================================
 
 TER
 BatchRollup::doApply()
 {
+    using namespace zkp::rollup;
+
+    auto& view    = ctx_.view();
     auto const& tx = ctx_.tx;
 
-    auto const newBatchId   = tx.getFieldU32(sfBatchId);
-    auto const declaredRoot = tx.getFieldH256(sfRollupRoot);
+    bool ok = false;
+    auto const bp = BatchProof::deserialize(tx.getFieldVL(sfBatchProof), ok);
+    if (!ok)
+        return tefINTERNAL;
 
-    auto sle = view().peek(keylet::rollup_state());
-
+    auto sle = view.peek(keylet::rollup_state());
     if (!sle)
     {
-        // Genesis path: create the SLE and set the initial sequencer key.
-        // preclaim already verified that declaredBatchId == 1 and that
-        // prevRoot == kGenesisRollupRoot().
         auto const pubKeyBlob = tx.getFieldVL(sfSequencerPubKey);
-        sle = zkp::rollup::RollupState::createGenesis(view(), pubKeyBlob);
+        sle = RollupState::createGenesis(view, pubKeyBlob);
         if (!sle)
-        {
-            JLOG(j_.error())
-                << "BatchVerifier: failed to create genesis RollupState SLE";
-            return tecINTERNAL;
-        }
+            return tefINTERNAL;
     }
 
-    // Update counter + root. Phase 4a will also:
-    //   - call RollupMerkleTree::update_leaf() for each entry
-    //   - recompute the Poseidon root and verify against declaredRoot
-    //   - append nullifiers to NullifierPage chain
-    //   - update sfBalance (pool balance) and transfer XRP for withdrawals
-    zkp::rollup::RollupState::setBatchCounter(*sle, newBatchId);
-    zkp::rollup::RollupState::setRollupRoot(*sle, declaredRoot);
+    auto tree = RollupState::loadTree(*sle);   // unique_ptr<RollupMerkleTree>
 
-    view().update(sle);
+    // All batches update the same 8 fixed leaf slots (0..7). The PoseidonCircuit
+    // proves old→new at a fixed leaf_pos; it does not encode a batch-offset.
+    // Using BatchCounter*kBatchSize would send batch 2 to positions 8..15,
+    // exceeding tree.size()=8 and throwing std::out_of_range in update_leaf.
+    constexpr std::size_t baseIndex = 0;
 
-    JLOG(j_.info())
-        << "BatchVerifier: committed batch " << newBatchId
-        << " — root now " << declaredRoot;
+    for (std::size_t i = 0; i < bp.entries.size(); ++i)
+    {
+        auto const& entry = bp.entries[i];
+        tree->update_leaf(baseIndex + i, entry.commitment);
+    }
+
+    // Phase 4a root-replay cross-check: the sequencer's declared newRoot
+    // must equal what the on-chain replay computes. This is what lets the
+    // eight per-entry Phase 4b proofs share (prevRoot, newRoot) anchors
+    // without an in-circuit aggregation step.
+    if (tree->root() != bp.newRoot)
+        return tefINTERNAL;
+
+    std::vector<uint256> nfs;
+    nfs.reserve(bp.entries.size());
+    for (auto const& entry : bp.entries)
+        nfs.push_back(entry.nullifier);
+    if (!NullifierStore::insertBatch(view, nfs))
+        return tefINTERNAL;
+
+    std::int64_t poolDrops = 0;
+    if (sle->isFieldPresent(sfBalance))
+        poolDrops = sle->getFieldAmount(sfBalance).xrp().drops();
+
+    // The rollup pool balance is stored in a custom SLE, invisible to
+    // rippled's XRP supply invariant. For withdrawals, we must debit an
+    // actual AccountRoot so the invariant sees a balanced XRP transfer.
+    // The TX submitter's account acts as the bridge pool in this prototype.
+    auto submitterSle = view.peek(keylet::account(tx.getAccountID(sfAccount)));
+    if (!submitterSle)
+        return tefINTERNAL;
+
+    for (auto const& entry : bp.entries)
+    {
+        if (entry.txType == RollupTxType::Deposit)
+        {
+            poolDrops += static_cast<std::int64_t>(entry.value);
+        }
+        else
+        {
+            poolDrops -= static_cast<std::int64_t>(entry.value);
+
+            // Debit the submitter's account to balance the XRP supply invariant.
+            auto subBal = submitterSle->getFieldAmount(sfBalance);
+            subBal -= STAmount(XRPAmount(entry.value));
+            submitterSle->setFieldAmount(sfBalance, subBal);
+            view.update(submitterSle);
+
+            auto destSle = view.peek(keylet::account(entry.destination));
+            if (!destSle)
+            {
+                auto const reserve = view.fees().accountReserve(0).drops();
+                if (static_cast<std::int64_t>(entry.value) < reserve)
+                    return tecNO_DST_INSUF_XRP;
+
+                destSle = std::make_shared<STLedgerEntry>(
+                    keylet::account(entry.destination));
+                destSle->setAccountID(sfAccount, entry.destination);
+                destSle->setFieldAmount(
+                    sfBalance, STAmount(XRPAmount(entry.value)));
+                destSle->setFieldU32(sfSequence, view.seq());
+                view.insert(destSle);
+            }
+            else
+            {
+                auto bal = destSle->getFieldAmount(sfBalance);
+                bal += STAmount(XRPAmount(entry.value));
+                destSle->setFieldAmount(sfBalance, bal);
+                view.update(destSle);
+            }
+        }
+    }
+    if (poolDrops < 0)
+        return tefINTERNAL;
+    sle->setFieldAmount(sfBalance, STAmount(XRPAmount(poolDrops)));
+
+    RollupState::storeTree(*sle, *tree);
+    RollupState::setBatchCounter(*sle, bp.batchId);
+    RollupState::setRollupRoot(*sle, bp.newRoot);
+    view.update(sle);
 
     return tesSUCCESS;
-}
-
-// =============================================================================
-// verifyProofMock  (Phase 1 only — REMOVE in Phase 4a)
-// =============================================================================
-
-bool
-BatchRollup::verifyProofMock(zkp::rollup::BatchProof const& bp)
-{
-    // Phase 1 scaffolding. We do a minimum sanity check so that totally
-    // absurd proofs (zero length, wrong txCount) still get rejected even
-    // without real cryptography — makes the mock path useful for wiring
-    // tests without giving the illusion of security.
-    if (bp.proof.empty())          return false;
-    if (bp.txCount == 0)           return false;
-    if (bp.txCount > zkp::rollup::BATCH_SIZE) return false;
-    if (bp.entries.size() != bp.txCount)      return false;
-    return true;
 }
 
 }  // namespace ripple
