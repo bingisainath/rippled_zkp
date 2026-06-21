@@ -62,7 +62,7 @@ public:
     // ZkProver loads SHA-256-circuit keys; we load Poseidon-circuit keys.
     static void
     initialize(std::string const& key_path = defaultKeyPath(),
-               std::size_t tree_depth = 32);
+               std::size_t tree_depth = 16);  // Lever #2: was 32
 
     // Generate fresh keys for a Poseidon circuit at the given depth and save
     // them. Throws on failure.

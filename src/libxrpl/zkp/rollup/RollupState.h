@@ -26,7 +26,12 @@ namespace rollup {
 
 class RollupMerkleTree;
 
-constexpr std::uint8_t  kRollupTreeDepth = 32;
+// Lever #2 (depth reduction): 32 -> 16. 2^16 = 65536 leaf slots is ample for
+// the prototype (we use 8 fixed genesis slots). Halving the depth halves the
+// in-circuit Merkle path length, cutting proving time further. All depth
+// literals (kDefaultRollupTreeDepth, the RollupProver defaults) and the circuit
+// must agree; the genesis root (kGenesisRollupRoot) recomputes from this value.
+constexpr std::uint8_t  kRollupTreeDepth = 16;
 constexpr std::size_t   kRollupBatchSize  = 8;
 
 // Root of the empty Poseidon Merkle tree pre-loaded with 8 genesis null-notes

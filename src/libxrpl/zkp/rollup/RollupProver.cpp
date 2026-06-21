@@ -19,7 +19,7 @@ std::shared_ptr<libsnark::r1cs_gg_ppzksnark_proving_key<DefaultCurve>>
 std::shared_ptr<libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve>>
     RollupProver::verification_key_;
 std::shared_ptr<PoseidonCircuit> RollupProver::circuit_;
-std::size_t RollupProver::tree_depth_ = 32;
+std::size_t RollupProver::tree_depth_ = 16;  // Lever #2: was 32
 bool RollupProver::initialised_ = false;
 
 std::string const&
@@ -206,7 +206,10 @@ RollupProver::createProof(
     RollupProofData out;
     out.proof_bytes = serializeProof(proof);
     out.anchor = prev_root;
-    out.new_anchor = new_root;
+    // Lever #1: the 2nd public input is now the new commitment (new_cm), not
+    // the post-update root. (Field reused; carries new_cm.) The new root is
+    // enforced off-circuit by doApply's replay.
+    out.new_anchor = new_note.commitment();
     out.nullifier = old_note.nullifier();
     out.value_pub = FieldT(new_note.value);
     return out;
@@ -292,21 +295,22 @@ RollupProver::verifyEntry(
 
     auto const& e = bp.entries[entryIndex];
 
-    // Pack public inputs in the order PoseidonCircuit allocates them:
-    //   anchor      = prevRoot           (this entry's input-tree root)
-    //   new_anchor  = newRoot            (this entry's output-tree root)
-    //   nullifier   = e.nullifier        (Poseidon(ask, rho_old))
-    //   value_pub   = FieldT(e.value)    (the transferred drops, public)
+    // Pack public inputs in the order PoseidonCircuit allocates them
+    // (Lever #1, single-path circuit):
+    //   anchor    = prevRoot         (this entry's input-tree root)
+    //   new_cm    = e.commitment     (the new note commitment, binds value)
+    //   nullifier = e.nullifier      (Poseidon(ask, rho_old))
+    //   value_pub = FieldT(e.value)  (the transferred drops, public)
     //
-    // All eight entries in the batch share prevRoot/newRoot. That's the
-    // root-chain invariant: each batch's eight transitions advance the tree
-    // monotonically from sfPrevRoot to sfRollupRoot. The doApply() replay
-    // (Phase 4a) cross-checks that the eight Poseidon updates produce
-    // exactly sfRollupRoot — so the verifier can trust the anchors as
-    // declared without verifying root computation in-circuit again.
+    // The circuit no longer proves the new root in-circuit. Instead it proves
+    // new_cm is well-formed and commits value_pub; binding new_cm to
+    // e.commitment here, plus doApply's deterministic root-replay (which
+    // inserts e.commitment and asserts the result == bp.newRoot), is what
+    // ties the proven value to the on-chain root. All eight entries share
+    // prevRoot as the input anchor.
     return verifyEntryPublicInputs(
         uint256ToField(bp.prevRoot),
-        uint256ToField(bp.newRoot),
+        uint256ToField(e.commitment),
         uint256ToField(e.nullifier),
         FieldT(e.value),
         entryProof);
