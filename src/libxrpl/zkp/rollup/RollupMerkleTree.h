@@ -43,7 +43,7 @@ namespace rollup {
 /// Default Merkle depth.  Matches PoseidonCircuit's compile-time depth
 /// (Phase 2c) and the treeDepth field stored in the on-chain RollupState SLE
 /// (Phase 1).  At depth 32 the tree holds up to 2^32 leaves.
-constexpr std::size_t kDefaultRollupTreeDepth = 32;
+constexpr std::size_t kDefaultRollupTreeDepth = 16;  // Lever #2: was 32
 
 /// MerkleWitness — the data the prover hands to PoseidonCircuit.
 ///

@@ -35,7 +35,7 @@ RollupSequencer::RollupSequencer(
 {
     if (treeDepth_ != static_cast<std::size_t>(kRollupTreeDepth))
         throw std::runtime_error(
-            "RollupSequencer: only treeDepth=32 supported (matches "
+            "RollupSequencer: treeDepth must equal kRollupTreeDepth (matches "
             "RollupState.sfRollupTreeDepth)");
     if (!submit_)
         throw std::runtime_error("RollupSequencer: SubmitFn is null");

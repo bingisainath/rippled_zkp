@@ -55,6 +55,16 @@ if [[ ! -f "$CSV_PATH" ]]; then
 fi
 echo "==> CSV: $CSV_PATH ($(wc -l < "$CSV_PATH") lines)"
 
+# Optional: append the live end-to-end L2->L1 samples (real tesSUCCESS on a
+# standalone node). Off by default because it boots a node and runs
+# gen_batch_blob (~72s/run). Enable with RUN_LIVE=1.
+if [[ "${RUN_LIVE:-0}" == "1" ]]; then
+    echo "==> Running live end-to-end harness (RUN_LIVE=1)..."
+    ROLLUP_BENCH_CSV="$CSV_PATH" \
+        bash "$RIPPLED_ROOT/tools/phase5/bench_live_e2e.sh" "$NUM_RUNS"
+    echo "==> CSV now: $CSV_PATH ($(wc -l < "$CSV_PATH") lines)"
+fi
+
 echo "==> Analysing..."
 mkdir -p "$OUT_DIR"
 PY=python3

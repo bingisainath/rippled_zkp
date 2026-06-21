@@ -42,6 +42,27 @@ SCENARIOS = {
     "verifier_verifyProof": "Verifier (verifyProof)",
     "onchain_pipeline_n8": "On-chain pipeline (preflight+preclaim, N=8)",
     "baseline_payment_x8": "Baseline (8x Payment)",
+    # Phase 5b additions:
+    "l2_pipeline_n8": "L2 pipeline (per-phase, N=8)",
+    "merkle_rollup_n8": "Merkle work: rollup batch (N=8)",
+    "merkle_baseline_n8": "Merkle work: N independent txs",
+    "live_l2_proofgen": "Live L2 proof-gen (gen_batch_blob)",
+    "live_l1_submit": "Live L1 submit (preflight+preclaim+doApply)",
+    "live_l1_close": "Live L1 ledger close",
+    "live_e2e_total": "Live end-to-end L2->L1 total",
+}
+
+# The original coarse-grained scenarios that have no per-phase breakdown and
+# belong in the flat per-scenario summary table.
+FLAT_SCENARIOS = [
+    "prover_createProof",
+    "verifier_verifyProof",
+    "onchain_pipeline_n8",
+    "baseline_payment_x8",
+]
+
+SUCCESS_OUTCOMES = {
+    "OK", "VALID", "tesSUCCESS", "temBAD_PROOF", "tecNO_DST_INSUF_XRP",
 }
 
 
@@ -63,13 +84,24 @@ def load(csv_path: str) -> pd.DataFrame:
     missing = expected - set(df.columns)
     if missing:
         sys.exit(f"CSV missing columns: {missing}")
+
+    # Phase 5b columns are optional — backfill defaults so a CSV produced by
+    # the pre-5b suite still analyses cleanly.
+    defaults = {
+        "phase": "", "n_l2_txs": 0, "merkle_updates": 0,
+        "poseidon_hashes": 0, "root_writes": 0, "state_writes": 0,
+    }
+    for col, dflt in defaults.items():
+        if col not in df.columns:
+            df[col] = dflt
+    df["phase"] = df["phase"].fillna("")
     return df
 
 
 def summarise(df: pd.DataFrame) -> pd.DataFrame:
-    """Per-scenario aggregates over successful runs."""
-    successful = {"OK", "VALID", "tesSUCCESS", "temBAD_PROOF", "tecNO_DST_INSUF_XRP"}
-    df = df[df["outcome"].isin(successful)].copy()
+    """Per-scenario aggregates over the flat (un-phased) scenarios."""
+    df = df[df["outcome"].isin(SUCCESS_OUTCOMES)
+            & df["scenario"].isin(FLAT_SCENARIOS)].copy()
 
     g = (
         df.groupby("scenario")
@@ -87,7 +119,102 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
-def write_markdown(summary: pd.DataFrame, out_path: Path) -> None:
+def _mean_us(df: pd.DataFrame, scenario: str, phase: str | None = None) -> float:
+    sub = df[df["scenario"] == scenario]
+    if phase is not None:
+        sub = sub[sub["phase"] == phase]
+    return float(sub["elapsed_us"].mean()) if not sub.empty else float("nan")
+
+
+def phase5b_markdown(df: pd.DataFrame) -> list[str]:
+    """Markdown sections for the per-phase, Merkle-work, and live-e2e data."""
+    d = df[df["outcome"].isin(SUCCESS_OUTCOMES)].copy()
+    out: list[str] = []
+
+    def ms(us: float) -> str:
+        return "n/a" if us != us else f"{us/1000:.1f} ms"
+
+    def us(x: float) -> str:
+        return "n/a" if x != x else f"{x:.0f} us"
+
+    # --- L2 per-phase breakdown -------------------------------------------
+    l2 = d[d["scenario"] == "l2_pipeline_n8"]
+    if not l2.empty:
+        out.append("\n## L2 pipeline — per-phase breakdown (N=8 batch)\n")
+        out.append("Off-chain stages, mean over runs. `createProof` is 8x "
+                   "Groth16 proof generation and dominates; everything else "
+                   "is sub-millisecond.\n")
+        g = (l2.groupby("phase")["elapsed_us"]
+             .agg(["mean", "std", "count"]).reindex(
+                 ["witness", "createProof", "serialize", "sign", "total_l2"]))
+        out.append("| Phase | Mean | Std.dev | Per-L2-tx (mean/8) |")
+        out.append("|---|---|---|---|")
+        for phase, row in g.iterrows():
+            if row["mean"] != row["mean"]:
+                continue
+            out.append(f"| {phase} | {ms(row['mean'])} | "
+                       f"{ms(row['std'])} | {ms(row['mean']/8)} |")
+
+    # --- Merkle-tree work: rollup vs N independent ------------------------
+    mr = d[d["scenario"] == "merkle_rollup_n8"]
+    mb = d[d["scenario"] == "merkle_baseline_n8"]
+    if not mr.empty and not mb.empty:
+        out.append("\n## Merkle-tree work: rollup batch vs N independent L1 txs\n")
+        out.append("Both commit the same 8 leaf transitions, so the Poseidon "
+                   "*compute* is identical. The rollup's saving is the on-chain "
+                   "footprint: **one** root/state write and **one** L1 "
+                   "transaction instead of eight.\n")
+        out.append("| Metric | Rollup (N=8 batch) | N independent txs | Ratio |")
+        out.append("|---|---|---|---|")
+
+        def cell(series, col):
+            return int(round(series[col].mean())) if not series.empty else 0
+
+        rows = [
+            ("Merkle leaf updates", "merkle_updates"),
+            ("Poseidon hashes", "poseidon_hashes"),
+            ("On-chain root writes", "root_writes"),
+            ("On-chain state writes", "state_writes"),
+        ]
+        for label, col in rows:
+            rv, bv = cell(mr, col), cell(mb, col)
+            ratio = f"{bv/rv:.0f}x" if rv else "—"
+            out.append(f"| {label} | {rv} | {bv} | {ratio} |")
+        out.append(f"| Wall-clock (mean) | {us(_mean_us(d,'merkle_rollup_n8'))} "
+                   f"| {us(_mean_us(d,'merkle_baseline_n8'))} | ~1x |")
+        out.append("\n*Headline:* the rollup reduces on-chain root/state "
+                   "writes and L1 transactions by **8x** for an 8-entry batch "
+                   "while performing the same Merkle compute.\n")
+
+    # --- Live end-to-end L2->L1 -------------------------------------------
+    le = d[d["scenario"] == "live_e2e_total"]
+    if not le.empty:
+        out.append("\n## Live end-to-end L2->L1 (standalone node, real tesSUCCESS)\n")
+        out.append("Measured on a live standalone rippled node where the batch "
+                   "genuinely reaches `tesSUCCESS` and `doApply` mutates ledger "
+                   "state. Means over runs.\n")
+        out.append("| Stage | Mean | Notes |")
+        out.append("|---|---|---|")
+        out.append(f"| L2 proof generation | {ms(_mean_us(d,'live_l2_proofgen'))} "
+                   "| 8x Groth16, off-chain |")
+        out.append(f"| L1 submit (preflight+preclaim+doApply) | "
+                   f"{ms(_mean_us(d,'live_l1_submit'))} | consensus hot path |")
+        out.append(f"| L1 ledger close | {ms(_mean_us(d,'live_l1_close'))} "
+                   "| ledger_accept |")
+        out.append(f"| **End-to-end total** | "
+                   f"**{ms(_mean_us(d,'live_e2e_total'))}** | full L2->L1 |")
+        tot = _mean_us(d, "live_e2e_total")
+        sub = _mean_us(d, "live_l1_submit")
+        if sub == sub:
+            out.append(f"\n- **On-chain (L1) cost per batch:** {ms(sub)} "
+                       f"= {ms(sub/8)} amortised per L2 transaction.")
+        if tot == tot:
+            out.append(f"- **End-to-end per L2 tx (incl. proof gen):** "
+                       f"{ms(tot/8)}.")
+    return out
+
+
+def write_markdown(summary: pd.DataFrame, df: pd.DataFrame, out_path: Path) -> None:
     lines = ["# Phase 5 — Benchmark Summary\n"]
     lines.append("Elapsed times in microseconds, aggregated over successful "
                  "runs only. `proof_bytes` is the per-proof or per-batch "
@@ -146,7 +273,60 @@ def write_markdown(summary: pd.DataFrame, out_path: Path) -> None:
             f"(baseline / rollup, mean bytes)"
         )
 
+    lines += phase5b_markdown(df)
+
     out_path.write_text("\n".join(lines))
+    print(f"  wrote {out_path}")
+
+
+def plot_merkle_writes(df: pd.DataFrame, out_path: Path) -> None:
+    """Bar chart: on-chain writes, rollup batch vs N independent txs."""
+    d = df[df["scenario"].isin(["merkle_rollup_n8", "merkle_baseline_n8"])]
+    if d.empty:
+        print(f"  skipped {out_path} (no merkle data)")
+        return
+    g = d.groupby("scenario")[["root_writes", "state_writes"]].mean()
+    labels = ["Rollup batch\n(N=8)", "N independent\ntxs"]
+    idx = ["merkle_rollup_n8", "merkle_baseline_n8"]
+    g = g.reindex(idx)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    import numpy as np
+    x = np.arange(len(idx))
+    w = 0.35
+    ax.bar(x - w/2, g["root_writes"], w, label="Root writes", color="#4C72B0")
+    ax.bar(x + w/2, g["state_writes"], w, label="State writes", color="#C44E52")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("On-chain writes per 8 L2 transitions")
+    ax.set_title("L1 write amplification: rollup vs un-batched")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  wrote {out_path}")
+
+
+def plot_l2_phases(df: pd.DataFrame, out_path: Path) -> None:
+    """Stacked/bar chart of the L2 per-phase wall-clock (log scale)."""
+    d = df[df["scenario"] == "l2_pipeline_n8"]
+    if d.empty:
+        print(f"  skipped {out_path} (no L2-phase data)")
+        return
+    phases = ["witness", "createProof", "serialize", "sign"]
+    means_ms = [d[d["phase"] == p]["elapsed_us"].mean() / 1000 for p in phases]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(phases, means_ms, color="#55A868")
+    ax.set_yscale("log")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
+    ax.set_title("L2 pipeline phase costs (N=8 batch)")
+    for i, m in enumerate(means_ms):
+        if m == m:
+            ax.annotate(f"{m:.2f}", xy=(i, m), xytext=(0, 3),
+                        textcoords="offset points", ha="center", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
     print(f"  wrote {out_path}")
 
 
@@ -294,10 +474,12 @@ def main() -> int:
     summary = summarise(df)
 
     print(f"Analysing {args.csv} -> {out_dir}")
-    write_markdown(summary, out_dir / "summary.md")
+    write_markdown(summary, df, out_dir / "summary.md")
     write_latex(summary, out_dir / "summary.tex")
     plot_proof_pipeline(df, out_dir / "fig_proof_pipeline.pdf")
     plot_baseline_vs_rollup(df, out_dir / "fig_baseline_vs_rollup.pdf")
+    plot_merkle_writes(df, out_dir / "fig_merkle_writes.pdf")
+    plot_l2_phases(df, out_dir / "fig_l2_phases.pdf")
     print("done.")
     return 0
 

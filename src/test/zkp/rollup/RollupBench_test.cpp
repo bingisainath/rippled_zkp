@@ -103,14 +103,32 @@ private:
 };
 
 // One CSV row. Sparse — fields not relevant to a given scenario stay zero.
+//
+// Phase 5b extension (per-phase L2->L1 decomposition + Merkle-tree work):
+//   `phase`          sub-stage label within a scenario ("witness",
+//                    "createProof", "serialize", "sign", "total", ...);
+//                    empty for the original coarse-grained scenarios.
+//   `nL2Txs`         number of L2 transitions this row accounts for (8 for a
+//                    full batch) — lets the analyser amortise to per-L2-tx.
+//   `merkleUpdates`  number of leaf mutations (append/update_leaf).
+//   `poseidonHashes` number of Poseidon(L,R) evaluations implied (depth * N).
+//   `rootWrites`     on-chain Merkle-root writes (1 for a rollup batch,
+//                    N for N independent L1 transactions).
+//   `stateWrites`    on-chain SLE/AccountRoot writes (the L1 footprint).
 struct BenchRow
 {
     std::string scenario;
     std::uint32_t run = 0;
+    std::string phase;
     std::int64_t elapsedUs = 0;
     std::size_t proofBytes = 0;
     std::size_t txBytes = 0;
     std::int64_t feeDrops = 0;
+    std::uint32_t nL2Txs = 0;
+    std::uint64_t merkleUpdates = 0;
+    std::uint64_t poseidonHashes = 0;
+    std::uint32_t rootWrites = 0;
+    std::uint32_t stateWrites = 0;
     std::string outcome;
 };
 
@@ -126,9 +144,25 @@ public:
         std::lock_guard lock(mu_);
         if (headerWritten_)
             return;
+        // A fresh CsvSink is constructed per test case, so the in-memory
+        // flag alone would re-emit the header for every scenario. Suppress
+        // it when the file already has content (header written by an earlier
+        // sink, or rows appended by the live harness).
+        {
+            std::ifstream in(path_, std::ios::ate | std::ios::binary);
+            if (in.good() && in.tellg() > 0)
+            {
+                headerWritten_ = true;
+                return;
+            }
+        }
         std::ofstream out(path_, std::ios::out | std::ios::app);
-        out << "scenario,run,elapsed_us,proof_bytes,tx_bytes,fee_drops,"
-               "outcome\n";
+        // Phase 5b extends the schema with `phase` and the Merkle-work
+        // columns. The columns are appended after the original ones so the
+        // analyser's subset-based column check stays backward-compatible.
+        out << "scenario,run,phase,elapsed_us,proof_bytes,tx_bytes,fee_drops,"
+               "n_l2_txs,merkle_updates,poseidon_hashes,root_writes,"
+               "state_writes,outcome\n";
         headerWritten_ = true;
     }
 
@@ -137,9 +171,11 @@ public:
     {
         std::lock_guard lock(mu_);
         std::ofstream out(path_, std::ios::out | std::ios::app);
-        out << r.scenario << ',' << r.run << ',' << r.elapsedUs << ','
-            << r.proofBytes << ',' << r.txBytes << ',' << r.feeDrops << ','
-            << r.outcome << '\n';
+        out << r.scenario << ',' << r.run << ',' << r.phase << ','
+            << r.elapsedUs << ',' << r.proofBytes << ',' << r.txBytes << ','
+            << r.feeDrops << ',' << r.nL2Txs << ',' << r.merkleUpdates << ','
+            << r.poseidonHashes << ',' << r.rootWrites << ',' << r.stateWrites
+            << ',' << r.outcome << '\n';
     }
 
 private:
@@ -445,6 +481,219 @@ class RollupBench_test : public beast::unit_test::suite
         }
     }
 
+    // Bench 5: per-phase L2->L1 decomposition for a full N=8 batch. Times
+    // each off-chain stage separately so the evaluation chapter can show
+    // *where* the wall-clock goes, not just the aggregate. The on-chain
+    // stages (preflight/preclaim/doApply + ledger close) for a genuinely
+    // successful batch are measured on the live standalone node by
+    // tools/phase5/bench_live_e2e.sh — the in-process suite cannot reach
+    // tesSUCCESS without API changes (Phase 4b deferral), so we keep the
+    // honest split: L2 phases here, completed L1 flow on the live node.
+    void
+    testL2PipelinePhases()
+    {
+        testcase("L2->L1 pipeline phase breakdown (N=8)");
+        using namespace jtx;
+
+        RollupProver::initialize();
+        CsvSink sink(csvPath());
+        sink.writeHeader();
+
+        auto const runs = numRuns();
+        for (std::uint32_t i = 0; i < runs; ++i)
+        {
+            BatchProof bp;
+            bp.batchId  = 1;
+            bp.prevRoot = uint256{};
+            bp.txCount  = BATCH_SIZE;
+            bp.entries.reserve(BATCH_SIZE);
+            bp.proof.assign(BATCH_SIZE * kEntryProofSlotBytes, 0);
+
+            std::array<uint256, BATCH_SIZE> newCommitments{};
+
+            // Phase t1: witness construction (x8).
+            std::vector<HonestWitness> ws;
+            ws.reserve(BATCH_SIZE);
+            Stopwatch tw;
+            for (std::size_t j = 0; j < BATCH_SIZE; ++j)
+                ws.push_back(buildHonestWitness(
+                    /*seedOld=*/0xC300 + i * 16 + j,
+                    /*seedNew=*/0xD400 + i * 16 + j,
+                    /*value=*/1'000'000ULL * (j + 1)));
+            auto const usWitness = tw.elapsedUs();
+
+            // Phase t2: Groth16 proof generation (x8) — the dominant cost.
+            Stopwatch tp;
+            for (std::size_t j = 0; j < BATCH_SIZE; ++j)
+            {
+                auto pd = RollupProver::createProof(
+                    ws[j].old_note, ws[j].new_note, ws[j].leaf_pos,
+                    ws[j].auth_path_old, ws[j].auth_path_new,
+                    ws[j].prev_root, ws[j].new_root);
+                BEAST_EXPECT(!pd.empty());
+                if (pd.proof_bytes.size() <= kEntryProofSlotBytes)
+                    std::memcpy(
+                        bp.proof.data() + j * kEntryProofSlotBytes,
+                        pd.proof_bytes.data(), pd.proof_bytes.size());
+
+                newCommitments[j] =
+                    zkp::MerkleCircuit::fieldElementToUint256(
+                        ws[j].new_note.commitment());
+                RollupTxEntry e;
+                e.commitment = newCommitments[j];
+                e.nullifier  = zkp::MerkleCircuit::fieldElementToUint256(
+                    ws[j].old_note.nullifier());
+                e.value  = ws[j].new_note.value;
+                e.txType = RollupTxType::Deposit;
+                bp.entries.push_back(e);
+            }
+            auto const usProve = tp.elapsedUs();
+
+            // newRoot from a fresh tree (matches Phase 4b recipe).
+            {
+                zkp::rollup::RollupMerkleTree tree(kRollupTreeDepth);
+                for (auto const& c : newCommitments)
+                    tree.append(c);
+                bp.newRoot = tree.root();
+            }
+
+            // Phase t3: serialise blob + compute batch hash.
+            Stopwatch ts;
+            auto const blob = bp.serialize();
+            uint256 const bh = bp.computeBatchHash();
+            auto const usSerialize = ts.elapsedUs();
+
+            // Phase t4: sequencer Ed25519 signature.
+            auto const seed = generateSeed("rollup-bench-sequencer-seed");
+            auto const kp = generateKeyPair(KeyType::ed25519, seed);
+            Stopwatch tsig;
+            auto const sig =
+                sign(kp.first, kp.second, Slice(bh.data(), bh.size()));
+            auto const usSign = tsig.elapsedUs();
+            BEAST_EXPECT(sig.size() == SEQUENCER_SIG_BYTES);
+
+            auto const emit = [&](char const* phase, std::int64_t us) {
+                BenchRow r;
+                r.scenario   = "l2_pipeline_n8";
+                r.run        = i;
+                r.phase      = phase;
+                r.elapsedUs  = us;
+                r.nL2Txs     = BATCH_SIZE;
+                r.proofBytes = BATCH_SIZE * kEntryProofSlotBytes;
+                r.txBytes    = blob.size();
+                r.outcome    = "OK";
+                sink.append(r);
+            };
+            emit("witness", usWitness);
+            emit("createProof", usProve);
+            emit("serialize", usSerialize);
+            emit("sign", usSign);
+            emit("total_l2", usWitness + usProve + usSerialize + usSign);
+
+            log << "  run " << i << ": witness=" << (usWitness / 1000)
+                << "ms prove=" << (usProve / 1000) << "ms serialize="
+                << usSerialize << "us sign=" << usSign << "us" << std::endl;
+        }
+    }
+
+    // Bench 6: Merkle-tree work — rollup batch vs N independent L1 txs.
+    //
+    // The headline structural claim of the dissertation: a rollup commits N
+    // L2 state transitions with a SINGLE on-chain Merkle-root write and a
+    // SINGLE L1 transaction, whereas N un-batched transactions each write
+    // their own root on their own ledger entry. The Poseidon *compute* is
+    // identical (depth * N hashes either way) — the saving is in on-chain
+    // write/transaction amplification (N x fewer), which this bench makes
+    // explicit via the root_writes / state_writes columns.
+    void
+    testMerkleWork()
+    {
+        testcase("Merkle work: rollup batch vs N independent L1 txs");
+
+        PoseidonHash::initialize();
+        CsvSink sink(csvPath());
+        sink.writeHeader();
+
+        using zkp::rollup::RollupMerkleTree;
+        constexpr std::size_t N = BATCH_SIZE;
+        auto const depth = static_cast<std::uint64_t>(kRollupTreeDepth);
+
+        // Pre-seed a depth-32 tree with the 8 genesis null-notes — exactly
+        // the state doApply() starts from before update_leaf(0..7).
+        auto preseed = [](RollupMerkleTree& t) {
+            for (std::uint64_t g = 0; g < zkp::rollup::kRollupBatchSize; ++g)
+                t.append(zkp::MerkleCircuit::fieldElementToUint256(
+                    RollupNote::createRandom(0, g).commitment()));
+        };
+
+        // The N fresh leaf commitments this batch installs.
+        std::array<uint256, N> leaves{};
+        for (std::size_t j = 0; j < N; ++j)
+            leaves[j] = zkp::MerkleCircuit::fieldElementToUint256(
+                RollupNote::createRandom(1'000'000ULL * (j + 1), 0xE100 + j)
+                    .commitment());
+
+        auto const runs = numRuns();
+        for (std::uint32_t i = 0; i < runs; ++i)
+        {
+            // ROLLUP: one shared tree, N update_leaf, ONE root/state write.
+            RollupMerkleTree rollupTree(kRollupTreeDepth);
+            preseed(rollupTree);
+            Stopwatch tr;
+            for (std::size_t j = 0; j < N; ++j)
+                rollupTree.update_leaf(j, leaves[j]);
+            (void)rollupTree.root();
+            auto const usRollup = tr.elapsedUs();
+
+            {
+                BenchRow r;
+                r.scenario       = "merkle_rollup_n8";
+                r.run            = i;
+                r.phase          = "update_leaf_x8";
+                r.elapsedUs      = usRollup;
+                r.nL2Txs         = N;
+                r.merkleUpdates  = N;
+                r.poseidonHashes = depth * N;  // recomputePathFromLeaf: depth each
+                r.rootWrites     = 1;          // single sfRollupRoot/sfTreeFrontier
+                r.stateWrites    = 1;          // single RollupState SLE
+                r.outcome        = "OK";
+                sink.append(r);
+            }
+
+            // WITHOUT ROLLUP: same N commits, but each is an independent L1
+            // transaction writing its own root on its own ledger entry. The
+            // per-commit compute is identical; the on-chain footprint is N x.
+            RollupMerkleTree baseTree(kRollupTreeDepth);
+            preseed(baseTree);
+            Stopwatch tb;
+            for (std::size_t j = 0; j < N; ++j)
+            {
+                baseTree.update_leaf(j, leaves[j]);
+                (void)baseTree.root();  // each intermediate root is "written"
+            }
+            auto const usBaseline = tb.elapsedUs();
+
+            {
+                BenchRow r;
+                r.scenario       = "merkle_baseline_n8";
+                r.run            = i;
+                r.phase          = "independent_x8";
+                r.elapsedUs      = usBaseline;
+                r.nL2Txs         = N;
+                r.merkleUpdates  = N;
+                r.poseidonHashes = depth * N;
+                r.rootWrites     = N;  // N separate root writes
+                r.stateWrites    = N;  // N separate L1 state writes
+                r.outcome        = "OK";
+                sink.append(r);
+            }
+
+            log << "  run " << i << ": rollup(1 root write)=" << usRollup
+                << "us  baseline(" << N << " root writes)=" << usBaseline
+                << "us" << std::endl;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers: real-batch construction (mirrors
     // BatchVerifier_test::makeRealSignedBatch, with slot-3 tamper).
@@ -464,7 +713,11 @@ class RollupBench_test : public beast::unit_test::suite
     {
         SignedBatch sb;
         sb.bp.batchId  = batchId;
-        sb.bp.prevRoot = uint256{};
+        // prevRoot must equal the genesis rollup root so preclaim's
+        // root-chain check passes and execution reaches the Groth16 verifier
+        // (which then rejects the tampered slot-3 proof with temBAD_PROOF).
+        // uint256{} would short-circuit earlier with tecFAILED_PROCESSING.
+        sb.bp.prevRoot = zkp::rollup::kGenesisRollupRoot();
         sb.bp.txCount  = BATCH_SIZE;
         sb.bp.entries.reserve(BATCH_SIZE);
         sb.bp.proof.assign(BATCH_SIZE * kEntryProofSlotBytes, 0);
@@ -559,6 +812,8 @@ public:
         testVerifierLatency();
         testOnChainPipelineLatency();
         testBaselinePaymentLatency();
+        testL2PipelinePhases();
+        testMerkleWork();
     }
 };
 

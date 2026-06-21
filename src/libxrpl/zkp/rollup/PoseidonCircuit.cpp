@@ -24,8 +24,16 @@ public:
         pb_ = std::make_shared<libsnark::protoboard<FieldT>>();
 
         // ----- Allocate primary inputs -----
+        // Lever #1 (single Merkle path): the 2nd public input was previously
+        // `new_anchor` (the post-update root). The new root is now enforced
+        // OFF-circuit by doApply's deterministic root-replay, so the circuit
+        // no longer proves a second Merkle path. Instead it exposes `new_cm`
+        // (the well-formed new commitment, which binds value_pub) as a public
+        // input; the verifier packs entry.commitment there, and doApply's
+        // replay ties that commitment to bp.newRoot. This halves the Poseidon
+        // path work (~32 fewer hashes) with no on-chain cost increase.
         anchor_.allocate(*pb_, "anchor");
-        new_anchor_.allocate(*pb_, "new_anchor");
+        new_cm_.allocate(*pb_, "new_cm");
         nullifier_.allocate(*pb_, "nullifier");
         value_pub_.allocate(*pb_, "value_pub");
         pb_->set_input_sizes(4);
@@ -51,42 +59,30 @@ public:
         cm_half2_.allocate(*pb_, "cm_half2");
         cm_.allocate(*pb_, "cm");
 
-        // New note's commitment slot
+        // New note's commitment slot. new_cm_ is now a PRIMARY input
+        // (allocated above); only its intermediate halves remain auxiliary.
         new_value_.allocate(*pb_, "new_value");
         new_rho_.allocate(*pb_, "new_rho");
         new_r_.allocate(*pb_, "new_r");
         new_cm_half1_.allocate(*pb_, "new_cm_half1");
         new_cm_half2_.allocate(*pb_, "new_cm_half2");
-        new_cm_.allocate(*pb_, "new_cm");
 
-        // Auth path & per-level state
+        // Auth path & per-level state — OLD path only (single-path circuit).
         leaf_pos_bits_.allocate(*pb_, tree_depth_, "leaf_pos_bits");
         auth_old_.resize(tree_depth_);
-        auth_new_.resize(tree_depth_);
         path_old_.resize(tree_depth_ + 1);
-        path_new_.resize(tree_depth_ + 1);
         for (std::size_t i = 0; i < tree_depth_; ++i)
-        {
             auth_old_[i].allocate(*pb_, FMT("", "auth_old_%zu", i));
-            auth_new_[i].allocate(*pb_, FMT("", "auth_new_%zu", i));
-        }
         for (std::size_t i = 0; i <= tree_depth_; ++i)
-        {
             path_old_[i].allocate(*pb_, FMT("", "path_old_%zu", i));
-            path_new_[i].allocate(*pb_, FMT("", "path_new_%zu", i));
-        }
 
-        // Per-level "left/right" muxed wires.
+        // Per-level "left/right" muxed wires — OLD path only.
         left_old_.resize(tree_depth_);
         right_old_.resize(tree_depth_);
-        left_new_.resize(tree_depth_);
-        right_new_.resize(tree_depth_);
         for (std::size_t i = 0; i < tree_depth_; ++i)
         {
             left_old_[i].allocate(*pb_, FMT("", "left_old_%zu", i));
             right_old_[i].allocate(*pb_, FMT("", "right_old_%zu", i));
-            left_new_[i].allocate(*pb_, FMT("", "left_new_%zu", i));
-            right_new_[i].allocate(*pb_, FMT("", "right_new_%zu", i));
         }
     }
 
@@ -156,14 +152,15 @@ public:
             *pb_, new_cm_half1_, new_cm_half2_, new_cm_, "new_cm");
         new_cm_gadget_->generate_r1cs_constraints();
 
-        // ===== 8. Merkle auth path: cm hashes up to anchor =====
+        // ===== 8. Merkle auth path: OLD cm hashes up to anchor =====
+        // Single path only. The new commitment's membership in the new root
+        // is NOT proven in-circuit; doApply replays the leaf update and checks
+        // the resulting root == bp.newRoot deterministically (Phase 4a). new_cm
+        // is a public input, so the verifier binds it to entry.commitment.
         // path_old_[0] = cm.
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(path_old_[0] - cm_, 1, 0),
             "path_old_base");
-        pb_->add_r1cs_constraint(
-            libsnark::r1cs_constraint<FieldT>(path_new_[0] - new_cm_, 1, 0),
-            "path_new_base");
 
         for (std::size_t i = 0; i < tree_depth_; ++i)
         {
@@ -192,19 +189,6 @@ public:
                     right_old_[i] - auth_old_[i]),
                 FMT("", "mux_right_old_%zu", i));
 
-            pb_->add_r1cs_constraint(
-                libsnark::r1cs_constraint<FieldT>(
-                    leaf_pos_bits_[i],
-                    auth_new_[i] - path_new_[i],
-                    left_new_[i] - path_new_[i]),
-                FMT("", "mux_left_new_%zu", i));
-            pb_->add_r1cs_constraint(
-                libsnark::r1cs_constraint<FieldT>(
-                    leaf_pos_bits_[i],
-                    path_new_[i] - auth_new_[i],
-                    right_new_[i] - auth_new_[i]),
-                FMT("", "mux_right_new_%zu", i));
-
             // path[i+1] = Poseidon(left, right)
             level_old_gadgets_.emplace_back(std::make_unique<PoseidonGadget>(
                 *pb_,
@@ -213,25 +197,13 @@ public:
                 path_old_[i + 1],
                 FMT("", "level_old_%zu", i)));
             level_old_gadgets_.back()->generate_r1cs_constraints();
-
-            level_new_gadgets_.emplace_back(std::make_unique<PoseidonGadget>(
-                *pb_,
-                left_new_[i],
-                right_new_[i],
-                path_new_[i + 1],
-                FMT("", "level_new_%zu", i)));
-            level_new_gadgets_.back()->generate_r1cs_constraints();
         }
 
-        // path_old_[depth] == anchor; path_new_[depth] == new_anchor.
+        // path_old_[depth] == anchor.
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
                 path_old_[tree_depth_] - anchor_, 1, 0),
             "anchor_eq");
-        pb_->add_r1cs_constraint(
-            libsnark::r1cs_constraint<FieldT>(
-                path_new_[tree_depth_] - new_anchor_, 1, 0),
-            "new_anchor_eq");
 
         constraints_built_ = true;
     }
@@ -258,9 +230,12 @@ public:
             throw std::invalid_argument(
                 "auth path length must equal tree_depth");
 
-        // Public inputs
+        // Public inputs. new_cm_ (2nd public input) is set by the new-cm
+        // gadget below. new_root / auth_path_new are no longer consumed —
+        // the new root is enforced off-circuit by doApply's replay.
+        (void)new_root;
+        (void)auth_path_new;
         pb_->val(anchor_) = prev_root;
-        pb_->val(new_anchor_) = new_root;
         pb_->val(value_pub_) = FieldT(new_note.value);
 
         // Old note privates
@@ -309,37 +284,26 @@ public:
         new_cm_h2_gadget_->generate_r1cs_witness();
         new_cm_gadget_->generate_r1cs_witness();
 
-        // Auth path bits and siblings
+        // Auth path bits and siblings — OLD path only.
         for (std::size_t i = 0; i < tree_depth_; ++i)
         {
             pb_->val(leaf_pos_bits_[i]) =
                 leaf_pos[i] ? FieldT::one() : FieldT::zero();
             pb_->val(auth_old_[i]) = auth_path_old[i];
-            pb_->val(auth_new_[i]) = auth_path_new[i];
         }
 
-        // Walk up
+        // Walk up the old path to the anchor.
         pb_->val(path_old_[0]) = pb_->val(cm_);
-        pb_->val(path_new_[0]) = pb_->val(new_cm_);
         for (std::size_t i = 0; i < tree_depth_; ++i)
         {
             FieldT cur_old = pb_->val(path_old_[i]);
-            FieldT cur_new = pb_->val(path_new_[i]);
             FieldT sib_old = pb_->val(auth_old_[i]);
-            FieldT sib_new = pb_->val(auth_new_[i]);
             bool bit = leaf_pos[i];
 
-            FieldT left_o = bit ? sib_old : cur_old;
-            FieldT right_o = bit ? cur_old : sib_old;
-            FieldT left_n = bit ? sib_new : cur_new;
-            FieldT right_n = bit ? cur_new : sib_new;
-            pb_->val(left_old_[i]) = left_o;
-            pb_->val(right_old_[i]) = right_o;
-            pb_->val(left_new_[i]) = left_n;
-            pb_->val(right_new_[i]) = right_n;
+            pb_->val(left_old_[i]) = bit ? sib_old : cur_old;
+            pb_->val(right_old_[i]) = bit ? cur_old : sib_old;
 
             level_old_gadgets_[i]->generate_r1cs_witness();
-            level_new_gadgets_[i]->generate_r1cs_witness();
         }
     }
 
@@ -374,8 +338,8 @@ private:
     std::shared_ptr<libsnark::protoboard<FieldT>> pb_;
     bool constraints_built_ = false;
 
-    // Public
-    libsnark::pb_variable<FieldT> anchor_, new_anchor_, nullifier_, value_pub_;
+    // Public: anchor (prev root), new_cm (new commitment), nullifier, value_pub
+    libsnark::pb_variable<FieldT> anchor_, new_cm_, nullifier_, value_pub_;
 
     // Private — old note
     libsnark::pb_variable<FieldT> value_, rho_, r_;
@@ -384,16 +348,15 @@ private:
     libsnark::pb_variable<FieldT> gx_, gy_, apk_x_, apk_y_;
     libsnark::pb_variable<FieldT> cm_half1_, cm_half2_, cm_;
 
-    // Private — new note
+    // Private — new note (new_cm_ itself is a public input, declared above)
     libsnark::pb_variable<FieldT> new_value_, new_rho_, new_r_;
-    libsnark::pb_variable<FieldT> new_cm_half1_, new_cm_half2_, new_cm_;
+    libsnark::pb_variable<FieldT> new_cm_half1_, new_cm_half2_;
 
-    // Auth path
+    // Auth path — OLD path only (single-path circuit)
     libsnark::pb_variable_array<FieldT> leaf_pos_bits_;
-    std::vector<libsnark::pb_variable<FieldT>> auth_old_, auth_new_;
-    std::vector<libsnark::pb_variable<FieldT>> path_old_, path_new_;
+    std::vector<libsnark::pb_variable<FieldT>> auth_old_;
+    std::vector<libsnark::pb_variable<FieldT>> path_old_;
     std::vector<libsnark::pb_variable<FieldT>> left_old_, right_old_;
-    std::vector<libsnark::pb_variable<FieldT>> left_new_, right_new_;
 
     // Sub-gadgets
     std::unique_ptr<BabyJubjubMulGadget> bjj_mul_;
@@ -402,7 +365,6 @@ private:
         new_cm_gadget_;
     std::unique_ptr<PoseidonGadget> nf_gadget_;
     std::vector<std::unique_ptr<PoseidonGadget>> level_old_gadgets_;
-    std::vector<std::unique_ptr<PoseidonGadget>> level_new_gadgets_;
 };
 
 PoseidonCircuit::PoseidonCircuit(std::size_t tree_depth)
