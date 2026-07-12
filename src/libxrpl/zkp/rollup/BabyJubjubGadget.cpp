@@ -201,6 +201,27 @@ BabyJubjubMulGadget::BabyJubjubMulGadget(
 void
 BabyJubjubMulGadget::generate_r1cs_constraints()
 {
+    // Pin the accumulator start and the final-correction offset to the
+    // identity (0, 1). Without these four linear constraints a malicious
+    // prover could assign arbitrary values to acc[0] / neg_offset and shift
+    // the output by any point delta (q = s·P + Δ) — which would let a
+    // forger fix up any equation built on top of this gadget (Phase 6
+    // EdDSAGadget soundness audit finding; also hardens PoseidonCircuit's
+    // apk derivation). The witness generator already assigns exactly these
+    // values, so honest proofs are unaffected.
+    this->pb.add_r1cs_constraint(
+        libsnark::r1cs_constraint<FieldT>(acc_x_[0], 1, 0),
+        FMT(this->annotation_prefix, " acc0_x_identity"));
+    this->pb.add_r1cs_constraint(
+        libsnark::r1cs_constraint<FieldT>(acc_y_[0] - FieldT::one(), 1, 0),
+        FMT(this->annotation_prefix, " acc0_y_identity"));
+    this->pb.add_r1cs_constraint(
+        libsnark::r1cs_constraint<FieldT>(neg_offset_x_, 1, 0),
+        FMT(this->annotation_prefix, " neg_offset_x_identity"));
+    this->pb.add_r1cs_constraint(
+        libsnark::r1cs_constraint<FieldT>(neg_offset_y_ - FieldT::one(), 1, 0),
+        FMT(this->annotation_prefix, " neg_offset_y_identity"));
+
     // Booleanity of every scalar bit.
     for (std::size_t i = 0; i < kScalarBits; ++i)
     {
