@@ -40,6 +40,7 @@ struct RollupProofData
     FieldT new_anchor;
     FieldT nullifier;
     FieldT value_pub;
+    bool is_withdraw = false;  // 5th public input: value-conservation flag
 
     bool
     empty() const
@@ -87,9 +88,10 @@ public:
         std::vector<FieldT> const& auth_path_old,
         std::vector<FieldT> const& auth_path_new,
         FieldT const& prev_root,
-        FieldT const& new_root);
+        FieldT const& new_root,
+        bool is_withdraw = false);
 
-    // Verify a serialised proof against the four public inputs.
+    // Verify a serialised proof against the five public inputs.
     // Returns true iff the proof is well-formed AND satisfies the verifier.
     static bool
     verifyProof(RollupProofData const& proof_data);
@@ -124,7 +126,8 @@ public:
         FieldT const& new_root,
         FieldT const& nullifier,
         FieldT const& value_pub,
-        std::vector<unsigned char> const& proof_bytes);
+        std::vector<unsigned char> const& proof_bytes,
+        bool is_withdraw = false);
 
     static bool
     isInitialized();

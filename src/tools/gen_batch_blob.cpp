@@ -12,6 +12,11 @@
 //   --dest A0,A1,...,AK-1   XRPL account addresses for withdrawal entries
 //   --print-nullifiers      Print NULLIFIER_i=hex for old notes then exit (no Groth16)
 //   --deposit-value-base N  Drops per note for batch_id > 1 (default 20_000_000 = 20 XRP)
+//   --verbose, -v           Narrate every L2 step (sequence-diagram steps 1–9) to
+//                           stderr: note/commitment/nullifier, per-entry witness +
+//                           public inputs, proof gen+verify, sign, serialize. stdout
+//                           output (BLOB=/PUB=/…) is unchanged so scripts still parse.
+//                           DEBUG ONLY — prints witness-adjacent values; never prod.
 //
 // Output (stdout, one line each):
 //   BLOB=<hex>
@@ -123,6 +128,19 @@ toHex(uint256 const& u)
     return toHex(v);
 }
 
+// Truncated hex for readable verbose traces.
+std::string
+shx(uint256 const& u)
+{
+    return toHex(u).substr(0, 16) + "…";
+}
+
+std::string
+shx(FieldT const& f)
+{
+    return shx(PoseidonHash::fieldToUint256(f));
+}
+
 // ── Note construction helpers ─────────────────────────────────────────────────
 
 // Genesis null-notes: createRandom(0, 0..7). Provides ask/apk for all batches.
@@ -212,6 +230,7 @@ main(int argc, char** argv)
     std::uint32_t numWithdrawals   = 0;
     std::vector<std::string> destStrs;
     std::uint64_t depositValueBase = 20'000'000ULL;  // 20 XRP default
+    bool          verbose          = false;
 
     for (int a = 1; a < argc; ++a)
     {
@@ -240,6 +259,10 @@ main(int argc, char** argv)
         else if (arg == "--deposit-value-base" && a + 1 < argc)
         {
             depositValueBase = std::stoull(argv[++a]);
+        }
+        else if (arg == "--verbose" || arg == "-v")
+        {
+            verbose = true;
         }
         else if (arg[0] != '-')
         {
@@ -365,6 +388,37 @@ main(int argc, char** argv)
         newTree.update_leaf(i, PoseidonHash::fieldToUint256(newNotes[i].commitment()));
     uint256 const newRoot = newTree.root();
 
+    // ── Verbose: batch-level narration (sequence-diagram steps 1–2, 7-pre) ───
+    if (verbose)
+    {
+        std::cerr << "\n"
+                  << "================================================================\n"
+                  << " VERBOSE TRACE — L2 batch assembly (sequence-diagram steps 1-9)\n"
+                  << "================================================================\n";
+        std::cerr << "[STEP 1-2] Sequencer collected " << kBatchSize
+                  << " L2 txs: " << numWithdrawals << " withdrawal(s), "
+                  << (kBatchSize - numWithdrawals) << " deposit(s).\n";
+        std::cerr << "           (bad/duplicate entries would be dropped here, before"
+                     " batching — honest users unaffected.)\n";
+        std::cerr << "[STEP 7-pre] L2 Merkle tree: Poseidon, depth="
+                  << static_cast<unsigned>(kRollupTreeDepth)
+                  << ", leaves 0.." << (kBatchSize - 1) << " updated.\n";
+        std::cerr << "             prevRoot=" << shx(prevRoot)
+                  << "   newRoot=" << shx(newRoot) << "\n\n";
+        std::cerr << "  idx  type      value(drops)  old-nullifier        new-commitment\n";
+        std::cerr << "  ---  --------  ------------  -------------------  -------------------\n";
+        for (std::size_t i = 0; i < kBatchSize; ++i)
+        {
+            bool const w = (i < numWithdrawals);
+            std::cerr << "  " << std::setw(3) << i << "  "
+                      << (w ? "WITHDRAW" : "DEPOSIT ") << "  "
+                      << std::setw(12) << newNotes[i].value << "  "
+                      << shx(oldNotes[i].nullifier()) << "  "
+                      << shx(newNotes[i].commitment()) << "\n";
+        }
+        std::cerr << "\n";
+    }
+
     // ── Assemble BatchProof skeleton ─────────────────────────────────────────
     BatchProof bp;
     bp.batchId  = batchId;
@@ -380,8 +434,6 @@ main(int argc, char** argv)
 
     for (std::size_t i = 0; i < kBatchSize; ++i)
     {
-        std::cerr << "  entry " << i << "... " << std::flush;
-
         auto const leafBits = leafPosBits(i, kRollupTreeDepth);
         auto authOld = toFieldVec(oldTree.authPath(i));
         auto authNew = toFieldVec(newTree.authPath(i));
@@ -389,10 +441,38 @@ main(int argc, char** argv)
         FieldT const prevRootF = PoseidonHash::uint256ToField(prevRoot);
         FieldT const newRootF  = PoseidonHash::uint256ToField(newRoot);
 
+        // Entries [0, numWithdrawals) are withdrawals: the circuit then
+        // enforces value-conservation (spent note value == withdrawn value).
+        bool const isWithdraw = (i < numWithdrawals);
+
+        if (verbose)
+        {
+            std::cerr << "[STEP 3-6] entry " << i << " ("
+                      << (isWithdraw ? "WITHDRAW" : "DEPOSIT") << ")\n";
+            std::cerr << "    witness PRIVATE: old_value=" << oldNotes[i].value
+                      << "  new_value=" << newNotes[i].value
+                      << "  (rho/r/ask hidden)  auth-path siblings="
+                      << authOld.size() << "\n";
+            std::cerr << "    public inputs  : anchor=" << shx(prevRootF)
+                      << "  new_cm=" << shx(newNotes[i].commitment())
+                      << "  nf=" << shx(oldNotes[i].nullifier()) << "\n";
+            std::cerr << "                     value_pub=" << newNotes[i].value
+                      << "  is_withdraw=" << (isWithdraw ? 1 : 0)
+                      << (isWithdraw
+                              ? "  (value-conservation enforced)"
+                              : "  (deposit: mints value)")
+                      << "\n";
+            std::cerr << "    generating Groth16 proof... " << std::flush;
+        }
+        else
+        {
+            std::cerr << "  entry " << i << "... " << std::flush;
+        }
         RollupProofData pd = RollupProver::createProof(
             oldNotes[i], newNotes[i],
             leafBits, authOld, authNew,
-            prevRootF, newRootF);
+            prevRootF, newRootF,
+            isWithdraw);
 
         if (pd.proof_bytes.size() > kEntryProofSlot)
         {
@@ -424,7 +504,11 @@ main(int argc, char** argv)
             return 1;
         }
 
-        std::cerr << "ok\n";
+        if (verbose)
+            std::cerr << "ok  (proof=" << pd.proof_bytes.size()
+                      << " B, padded into 192 B slot; local Groth16 verify PASS)\n";
+        else
+            std::cerr << "ok\n";
     }
 
     // ── Sign ──────────────────────────────────────────────────────────────────
@@ -434,6 +518,22 @@ main(int argc, char** argv)
 
     // ── Serialise ─────────────────────────────────────────────────────────────
     auto const blob = bp.serialize();
+
+    if (verbose)
+    {
+        std::cerr << "\n[STEP 8] Sequencer Ed25519-signed batchHash="
+                  << shx(batchHash) << "\n";
+        std::cerr << "[STEP 9] Serialized blob = " << blob.size()
+                  << " B  (header 76 + 8x192 proofs + 8x93 entries + 64 sig)\n";
+        std::cerr << "         Ready to submit as BatchRollup.sfBatchProof on L1.\n";
+        std::cerr << "         L1 will then (sequence-diagram steps 10-22):\n";
+        std::cerr << "           preflight  : size / txCount / Ed25519 sig\n";
+        std::cerr << "           preclaim   : prevRoot+batchId chain, nullifier"
+                     " uniqueness, pool solvency, 8x Groth16 verify\n";
+        std::cerr << "           doApply    : 8x update_leaf -> root==newRoot check,"
+                     " insert 8 nullifiers, move XRP, persist RollupState SLE\n";
+        std::cerr << "================================================================\n\n";
+    }
 
     // ── Print results ─────────────────────────────────────────────────────────
     std::cout << "BLOB="      << toHex(blob)    << "\n";

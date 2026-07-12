@@ -54,8 +54,11 @@ constexpr std::size_t SEQUENCER_SIG_BYTES = 64;
  * Per-transaction public data inside a rollup batch.
  *
  * Intentionally fixed-width (93 bytes) to allow O(1) byte-offset parsing.
- * No per-entry proof — the single Groth16 proof at the batch level aggregates
- * all N L2 transitions (v2.2 §1.1 Core Claim).
+ * One Groth16 proof per transaction (N proofs total) — the batch is NOT
+ * proof-aggregated. The N proofs are independent and verified in a loop in
+ * preclaim(); they are bound to a single Merkle root by an on-chain root
+ * replay in doApply() (tree.root() == newRoot), not by recursion. Proof
+ * aggregation is costed future work (~10-16M constraints), see docs.
  */
 enum class RollupTxType : std::uint8_t {
     Deposit  = 0,
@@ -92,12 +95,13 @@ static_assert(sizeof(std::uint64_t) == 8,  "u64 must be 8 bytes");
  *      4     32    prevRoot           uint256  (Poseidon root BEFORE batch)
  *     36     32    newRoot            uint256  (Poseidon root AFTER batch)
  *     68      4    txCount            uint32_t LE
- *     72      4    proofSize          uint32_t LE (~190 B in production)
- *     76  proofSize  proof            Groth16 proof bytes (single, aggregated)
+ *     72      4    proofSize          uint32_t LE (total proof bytes = N*192)
+ *     76  proofSize  proofs           N independent Groth16 proofs (one per tx),
+ *                                      concatenated, each padded to a 192 B slot
  *    +N*93           entries[]        N = txCount RollupTxEntry structs
  *    + 64            sequencerSig     Ed25519(sequencerPubKey, batchHash)
  *
- *   Total for N=8: 76 + 190 + 8*93 + 64 ≈ 1074 bytes.
+ *   Total for N=8: 76 + 8*192 + 8*93 + 64 = 2420 bytes.
  *
  * `sequencerPubKey` lives in sfSequencerPubKey on the STTx — not in the blob.
  */
@@ -108,7 +112,7 @@ struct BatchProof
     uint256       newRoot{};
     std::uint32_t txCount{0};  // must equal entries.size() — enforced in preflight
 
-    std::vector<std::uint8_t> proof;                    // Groth16 (opaque in Phase 1)
+    std::vector<std::uint8_t> proof;                    // N concatenated Groth16 proofs (192 B/slot)
     std::vector<RollupTxEntry> entries;                 // N = txCount
     std::array<std::uint8_t, SEQUENCER_SIG_BYTES> sequencerSig{};
 

@@ -121,3 +121,4 @@ bld.rippled/
 CMakeCache.txt
 CMakeFiles/
 *.cmak
+unittest_full_d16.log

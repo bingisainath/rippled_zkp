@@ -36,7 +36,13 @@ public:
         new_cm_.allocate(*pb_, "new_cm");
         nullifier_.allocate(*pb_, "nullifier");
         value_pub_.allocate(*pb_, "value_pub");
-        pb_->set_input_sizes(4);
+        // Value-conservation flag (public). 1 = withdrawal/spend (the spent
+        // note's value MUST equal value_pub), 0 = deposit (value is minted
+        // from an escrowed L1 deposit, so the null old-note's value differs).
+        // The on-chain verifier sets this from the entry's txType, so a prover
+        // cannot claim deposit-semantics for a withdrawal.
+        is_withdraw_.allocate(*pb_, "is_withdraw");
+        pb_->set_input_sizes(5);
 
         // ----- Allocate auxiliary inputs -----
         // Note 1 (old / spent)
@@ -139,6 +145,23 @@ public:
             libsnark::r1cs_constraint<FieldT>(value_pub_ - new_value_, 1, 0),
             "value_pub_eq");
 
+        // ===== 6b. Value conservation for spends (withdrawals) =====
+        // is_withdraw_ is a boolean public input. When it is 1 (withdrawal),
+        // the spent note's value (value_) MUST equal the public/created value
+        // (value_pub_) — you cannot withdraw more than the note you are
+        // spending holds. When it is 0 (deposit), the constraint is vacuous,
+        // because a deposit legitimately mints value: its old note is a null
+        // note (value 0) and value_pub_ is the freshly deposited amount.
+        //   is_withdraw_ * (value_ - value_pub_) == 0
+        // In R1CS this is one boolean constraint plus one multiplication
+        // constraint — negligible proving-time cost (no extra Poseidon calls).
+        libsnark::generate_boolean_r1cs_constraint<FieldT>(
+            *pb_, is_withdraw_, "is_withdraw_bool");
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                is_withdraw_, value_ - value_pub_, 0),
+            "value_conservation");
+
         // ===== 7. New commitment (same structure, fresh rho/r) =====
         new_cm_h1_gadget_ = std::make_unique<PoseidonGadget>(
             *pb_, new_value_, new_rho_, new_cm_half1_, "new_cm_h1");
@@ -216,7 +239,8 @@ public:
         std::vector<FieldT> const& auth_path_old,
         std::vector<FieldT> const& auth_path_new,
         FieldT const& prev_root,
-        FieldT const& new_root)
+        FieldT const& new_root,
+        bool is_withdraw)
     {
         if (!constraints_built_)
             throw std::logic_error(
@@ -237,6 +261,7 @@ public:
         (void)auth_path_new;
         pb_->val(anchor_) = prev_root;
         pb_->val(value_pub_) = FieldT(new_note.value);
+        pb_->val(is_withdraw_) = is_withdraw ? FieldT::one() : FieldT::zero();
 
         // Old note privates
         pb_->val(value_) = FieldT(old_note.value);
@@ -338,8 +363,10 @@ private:
     std::shared_ptr<libsnark::protoboard<FieldT>> pb_;
     bool constraints_built_ = false;
 
-    // Public: anchor (prev root), new_cm (new commitment), nullifier, value_pub
-    libsnark::pb_variable<FieldT> anchor_, new_cm_, nullifier_, value_pub_;
+    // Public: anchor (prev root), new_cm (new commitment), nullifier,
+    // value_pub, is_withdraw (value-conservation flag)
+    libsnark::pb_variable<FieldT> anchor_, new_cm_, nullifier_, value_pub_,
+        is_withdraw_;
 
     // Private — old note
     libsnark::pb_variable<FieldT> value_, rho_, r_;
@@ -388,11 +415,12 @@ PoseidonCircuit::generateWitness(
     std::vector<FieldT> const& auth_path_old,
     std::vector<FieldT> const& auth_path_new,
     FieldT const& prev_root,
-    FieldT const& new_root)
+    FieldT const& new_root,
+    bool is_withdraw)
 {
     impl_->generateWitness(
         old_note, new_note, leaf_pos, auth_path_old, auth_path_new,
-        prev_root, new_root);
+        prev_root, new_root, is_withdraw);
 }
 
 FieldT

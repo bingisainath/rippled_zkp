@@ -101,7 +101,7 @@ CFGEOF
 start_node() {
     pkill -f "rippled.*${KILL_TOKEN}" 2>/dev/null || true
     sleep 1
-    rm -rf "${DB_DIR}"; mkdir -p "${DB_DIR}/nudb"; rm -f "${WORK_DIR}/debug.log"
+    # rm -rf "${DB_DIR}"; mkdir -p "${DB_DIR}/nudb"; rm -f "${WORK_DIR}/debug.log"
     nohup "${RIPPLED}" --conf "${CFG}" --standalone --start \
         > "${WORK_DIR}/stdout.log" 2>&1 &
     local w=0
@@ -192,7 +192,7 @@ clear 2>/dev/null || true
 cat <<BANNER
 ${C_HDR}╔══════════════════════════════════════════════════════════════════╗
 ║   ZK-ROLLUP LIVE DEMO — real XRP moved by a zero-knowledge proof  ║
-║   MSc Dissertation · Trinity College Dublin · Sainath Annadevara  ║
+║   MSc Dissertation · Trinity College Dublin · Sainath Bingi  ║
 ╚══════════════════════════════════════════════════════════════════╝${C_OFF}
 BANNER
 

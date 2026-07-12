@@ -41,6 +41,7 @@
 
 #include <xrpl/basics/Log.h>
 
+#include <cstdlib>
 #include <set>
 #include <vector>
 
@@ -50,6 +51,18 @@ namespace {
 
 constexpr std::size_t kMaxBatchBlobBytes  = 1u << 20;  // 1 MiB
 constexpr std::size_t kBatchSize          = 8;
+
+// L1-side walkthrough narration (sequence-diagram steps 10-22). Opt-in via the
+// ZKR_WALKTHROUGH environment variable so production runs stay silent and the
+// consensus hot path is unaffected by default. When set, each preflight/
+// preclaim/doApply stage logs a "[L1-WALKTHROUGH][STEP N]" line at info level,
+// greppable from debug.log. DEBUG/DEMO ONLY — do not enable in production.
+inline bool
+walkthroughOn()
+{
+    static bool const on = (std::getenv("ZKR_WALKTHROUGH") != nullptr);
+    return on;
+}
 
 // Fixed slot size for each per-entry Groth16 proof inside sfBatchProof.proof.
 // Phase 2 measured the serialised proof at ~137 bytes; 192 gives headroom
@@ -186,6 +199,14 @@ BatchRollup::preflight(PreflightContext const& ctx)
             /*mustBeFullyCanonical=*/true))
         return temBAD_SIGNATURE;
 
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 10] preflight OK: blob " << blob.size()
+            << "B deserialised; batchId=" << bp.batchId
+            << " txCount=" << bp.txCount
+            << "; prevRoot/newRoot match tx fields; proof layout "
+            << bp.proof.size() << "B (8x192); Ed25519 sequencer signature VERIFIED";
+
     return preflight2(ctx);
 }
 
@@ -224,6 +245,12 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
     if (bp.batchId != expectedBatchId)
         return temMALFORMED;
 
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 11] preclaim chain OK: prevRoot matches"
+            << " on-chain root; batchId=" << bp.batchId
+            << " is strictly next (append-only invariant holds)";
+
     // In-batch nullifier uniqueness — cheap O(n log n); runs before Groth16
     // so a tampered batch with duplicate nullifiers fails fast.
     std::set<uint256> seenInBatch;
@@ -249,6 +276,12 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
         }
     }
 
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 12] preclaim nullifiers OK: all "
+            << bp.entries.size() << " unique in-batch and unspent on-chain"
+            << " (no double-spend)";
+
     // Pool solvency check for withdrawals — runs before Groth16 for fail-fast.
     std::int64_t totalWithdrawal = 0;
     for (auto const& entry : bp.entries)
@@ -266,9 +299,18 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
             return tecINSUF_RESERVE_LINE;
     }
 
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 13] preclaim solvency OK: totalWithdrawal="
+            << totalWithdrawal << " drops within pool balance";
+
     // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
     // This is the most expensive check (~pairing per entry); all cheap policy
     // checks above must pass first.
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 14] preclaim verifying " << kBatchSize
+            << " Groth16 proofs (one pairing check per entry, shared prevRoot)…";
     JLOG(ctx.j.info()) << "BatchRollup: preclaim running Groth16 verification ("
                        << kBatchSize << " entries)";
     if (!verifyBatchProof(bp))
@@ -278,6 +320,10 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
     }
     JLOG(ctx.j.info()) << "BatchRollup: all " << kBatchSize
                        << " Groth16 proofs verified";
+    if (walkthroughOn())
+        JLOG(ctx.j.info())
+            << "[L1-WALKTHROUGH][STEP 14] preclaim OK: all " << kBatchSize
+            << " Groth16 proofs VERIFIED → preclaim returns tesSUCCESS";
 
     return tesSUCCESS;
 }
@@ -306,6 +352,11 @@ BatchRollup::doApply()
 
     auto tree = RollupState::loadTree(*sle);   // unique_ptr<RollupMerkleTree>
 
+    if (walkthroughOn())
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 15] doApply: loaded L2 Poseidon tree from"
+            << " RollupState SLE (deserialised frontier)";
+
     // All batches update the same 8 fixed leaf slots (0..7). The PoseidonCircuit
     // proves old→new at a fixed leaf_pos; it does not encode a batch-offset.
     // Using BatchCounter*kBatchSize would send batch 2 to positions 8..15,
@@ -318,6 +369,11 @@ BatchRollup::doApply()
         tree->update_leaf(baseIndex + i, entry.commitment);
     }
 
+    if (walkthroughOn())
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 16] doApply: replayed " << bp.entries.size()
+            << " update_leaf() insertions into the L2 tree (in memory)";
+
     // Phase 4a root-replay cross-check: the sequencer's declared newRoot
     // must equal what the on-chain replay computes. This is what lets the
     // eight per-entry Phase 4b proofs share (prevRoot, newRoot) anchors
@@ -325,12 +381,24 @@ BatchRollup::doApply()
     if (tree->root() != bp.newRoot)
         return tefINTERNAL;
 
+    if (walkthroughOn())
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 17] doApply: ROOT-REPLAY BIND OK —"
+            << " recomputed Poseidon root == sequencer's declared newRoot"
+            << " (this binds all " << bp.entries.size()
+            << " proofs to one root; no aggregation needed)";
+
     std::vector<uint256> nfs;
     nfs.reserve(bp.entries.size());
     for (auto const& entry : bp.entries)
         nfs.push_back(entry.nullifier);
     if (!NullifierStore::insertBatch(view, nfs))
         return tefINTERNAL;
+
+    if (walkthroughOn())
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 18] doApply: inserted " << nfs.size()
+            << " nullifiers into NullifierStore (spent markers persisted)";
 
     std::int64_t poolDrops = 0;
     if (sle->isFieldPresent(sfBalance))
@@ -388,10 +456,34 @@ BatchRollup::doApply()
         return tefINTERNAL;
     sle->setFieldAmount(sfBalance, STAmount(XRPAmount(poolDrops)));
 
+    if (walkthroughOn())
+    {
+        std::size_t nDep = 0, nWdr = 0;
+        for (auto const& entry : bp.entries)
+            (entry.txType == RollupTxType::Deposit ? nDep : nWdr)++;
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 19] doApply: moved XRP — " << nDep
+            << " deposit(s) raised the virtual pool, " << nWdr
+            << " withdrawal(s) debited submitter (bridge) + credited"
+            << " destination AccountRoot(s); new pool balance=" << poolDrops
+            << " drops";
+    }
+
     RollupState::storeTree(*sle, *tree);
     RollupState::setBatchCounter(*sle, bp.batchId);
     RollupState::setRollupRoot(*sle, bp.newRoot);
     view.update(sle);
+
+    if (walkthroughOn())
+    {
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 20-21] doApply: persisted RollupState SLE"
+            << " (serialised tree + newRoot + batchCounter=" << bp.batchId
+            << "); rippled re-hashes the SLE with SHA-512Half into the L1 SHAMap";
+        JLOG(ctx_.journal.info())
+            << "[L1-WALKTHROUGH][STEP 22] doApply DONE → tesSUCCESS ("
+            << bp.entries.size() << " L2 txs settled in 1 L1 transaction)";
+    }
 
     return tesSUCCESS;
 }

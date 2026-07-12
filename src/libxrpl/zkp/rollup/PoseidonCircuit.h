@@ -11,6 +11,10 @@
 //                   prototype — the dissertation's threat model is integrity,
 //                   not privacy; per v2.2 §1.3, privacy is out of scope for
 //                   the rollup, in scope only for the existing ZkDeposit pool).
+//   - is_withdraw : value-conservation flag. 1 => spend (value == value_pub
+//                   enforced: cannot withdraw more than the spent note holds);
+//                   0 => deposit (value minted from an escrowed L1 deposit).
+//                   Set by the on-chain verifier from the entry's txType.
 //
 // Private inputs (auxiliary):
 //   - value (matches value_pub via constraint)
@@ -86,7 +90,8 @@ public:
         std::vector<FieldT> const& auth_path_old,
         std::vector<FieldT> const& auth_path_new,
         FieldT const& prev_root,
-        FieldT const& new_root);
+        FieldT const& new_root,
+        bool is_withdraw = false);
 
     // Returns the Poseidon-canonical empty root for a tree of `depth`. This
     // is the value that Phase 4a will substitute for `kGenesisRollupRoot()`

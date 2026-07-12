@@ -183,7 +183,8 @@ RollupProver::createProof(
     std::vector<FieldT> const& auth_path_old,
     std::vector<FieldT> const& auth_path_new,
     FieldT const& prev_root,
-    FieldT const& new_root)
+    FieldT const& new_root,
+    bool is_withdraw)
 {
     if (!initialised_)
         initialize();
@@ -195,7 +196,7 @@ RollupProver::createProof(
     local.generateWitness(
         old_note, new_note, leaf_pos,
         auth_path_old, auth_path_new,
-        prev_root, new_root);
+        prev_root, new_root, is_withdraw);
 
     auto primary = local.getPrimaryInput();
     auto aux = local.getAuxiliaryInput();
@@ -212,6 +213,7 @@ RollupProver::createProof(
     out.new_anchor = new_note.commitment();
     out.nullifier = old_note.nullifier();
     out.value_pub = FieldT(new_note.value);
+    out.is_withdraw = is_withdraw;
     return out;
 }
 
@@ -223,11 +225,14 @@ RollupProver::verifyProof(RollupProofData const& proof_data)
     if (proof_data.empty())
         return false;
 
+    // Public-input vector — MUST match PoseidonCircuit's allocation order:
+    //   anchor, new_cm, nullifier, value_pub, is_withdraw.
     libsnark::r1cs_primary_input<FieldT> primary;
     primary.push_back(proof_data.anchor);
     primary.push_back(proof_data.new_anchor);
     primary.push_back(proof_data.nullifier);
     primary.push_back(proof_data.value_pub);
+    primary.push_back(proof_data.is_withdraw ? FieldT::one() : FieldT::zero());
 
     try
     {
@@ -265,14 +270,16 @@ RollupProver::verifyEntryPublicInputs(
     FieldT const& new_root,
     FieldT const& nullifier,
     FieldT const& value_pub,
-    std::vector<unsigned char> const& proof_bytes)
+    std::vector<unsigned char> const& proof_bytes,
+    bool is_withdraw)
 {
     RollupProofData pd;
-    pd.proof_bytes = proof_bytes;
-    pd.anchor      = prev_root;
-    pd.new_anchor  = new_root;
-    pd.nullifier   = nullifier;
-    pd.value_pub   = value_pub;
+    pd.proof_bytes  = proof_bytes;
+    pd.anchor       = prev_root;
+    pd.new_anchor   = new_root;
+    pd.nullifier    = nullifier;
+    pd.value_pub    = value_pub;
+    pd.is_withdraw  = is_withdraw;
     return verifyProof(pd);
 }
 
@@ -308,12 +315,21 @@ RollupProver::verifyEntry(
     // inserts e.commitment and asserts the result == bp.newRoot), is what
     // ties the proven value to the on-chain root. All eight entries share
     // prevRoot as the input anchor.
+    //
+    // The 5th public input (is_withdraw) is derived HERE from the entry's
+    // declared txType. For a withdrawal the circuit's value-conservation
+    // constraint forces the spent note's value == e.value, so a sequencer
+    // cannot withdraw more than the note it is spending holds. A prover cannot
+    // dodge this by mislabelling: if the entry is a Withdraw, doApply moves
+    // e.value of real XRP, and this verifier requires the conservation proof.
+    bool const isWithdraw = (e.txType == RollupTxType::Withdraw);
     return verifyEntryPublicInputs(
         uint256ToField(bp.prevRoot),
         uint256ToField(e.commitment),
         uint256ToField(e.nullifier),
         FieldT(e.value),
-        entryProof);
+        entryProof,
+        isWithdraw);
 }
 
 std::size_t
