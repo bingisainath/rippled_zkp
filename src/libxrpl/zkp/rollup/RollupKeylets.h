@@ -81,6 +81,21 @@ nullifier_page(std::uint32_t pageIndex)
         sha512Half(std::make_pair(pageIndex, uint256{})));
 }
 
+/**
+ * Track 2 (Phase 6, Option A) rollup state SLE — INDEPENDENT of Track 1.
+ *
+ * Reuses the ltROLLUP_STATE ledger entry type but a DIFFERENT domain tag,
+ * so the two tracks keep separate roots / batch counters / frontiers in the
+ * same ledger without colliding. No new ledger format registration needed.
+ */
+inline Keylet
+rollup_state2()
+{
+    static uint256 const ROLLUP_STATE2_TAG =
+        sha512Half(std::string("ZKRollupState2"));
+    return Keylet(ltROLLUP_STATE, ROLLUP_STATE2_TAG);
+}
+
 }  // namespace keylet
 }  // namespace ripple
 
