@@ -236,4 +236,25 @@ if(xrpld)
     Ripple::libs
     xrpl.libxrpl
   )
+
+  # ── gen_batch_blob2 — Track 2 (Option A) single-proof batch blob ──────────
+  add_executable(gen_batch_blob2
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/gen_batch_blob2.cpp
+  )
+  target_include_directories(gen_batch_blob2
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(gen_batch_blob2
+    Ripple::boost
+    Ripple::opts
+    Ripple::libs
+    xrpl.libxrpl
+  )
+  # xrpl.libxrpl contains the rollup transactor objects (BatchVerifier*.o),
+  # which reference Transactor symbols defined in xrpld — code this tool never
+  # calls. Tolerate those unresolved refs so the tool links against libxrpl
+  # alone (same rationale would apply to gen_batch_blob).
+  target_link_options(gen_batch_blob2 PRIVATE
+    -Wl,--unresolved-symbols=ignore-all)
 endif()
