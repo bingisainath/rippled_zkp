@@ -522,3 +522,18 @@ TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
     {sfTxCount,          soeREQUIRED},
     {sfSequencerPubKey,  soeREQUIRED},
 }))
+
+// -----------------------------------------------------------------------------
+// ZK-Rollup Track 2 batch transaction (Phase 6, Option A — monolithic circuit).
+// Code 62: one Groth16 proof per batch, account-based leaves. Runs in parallel
+// with ttBATCH_ROLLUP (61) in the same node/ledger for head-to-head evaluation.
+// Same STTx field set; sfBatchProof carries a BatchProof2 blob.
+// -----------------------------------------------------------------------------
+TRANSACTION(ttBATCH_ROLLUP2, 62, BatchRollup2, ({
+    {sfBatchProof,       soeREQUIRED},
+    {sfBatchId,          soeREQUIRED},
+    {sfPrevRoot,         soeREQUIRED},
+    {sfRollupRoot,       soeREQUIRED},
+    {sfTxCount,          soeREQUIRED},
+    {sfSequencerPubKey,  soeREQUIRED},
+}))

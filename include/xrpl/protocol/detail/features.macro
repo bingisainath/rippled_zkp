@@ -123,3 +123,7 @@ XRPL_FEATURE(ZeroKnowledgePrivacy,Supported::yes,  VoteBehavior::DefaultNo)
 // ZK-Rollup feature flag (Phase 1). MUST be separate from
 // featureZeroKnowledgePrivacy — see v2.2 §10.4.
 XRPL_FEATURE(ZKRollup, Supported::yes, VoteBehavior::DefaultYes)
+
+// ZK-Rollup Track 2 (Phase 6, Option A — monolithic batch circuit). Separate
+// amendment so Track 1 and Track 2 gate independently in the same binary.
+XRPL_FEATURE(ZKRollup2, Supported::yes, VoteBehavior::DefaultYes)

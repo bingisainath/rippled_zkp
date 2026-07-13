@@ -6,7 +6,6 @@
 
 #include <libxrpl/zkp/rollup/RollupState2.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>
-#include <libxrpl/zkp/rollup/RollupMerkleTree.h>
 #include <libxrpl/zkp/rollup/RollupState.h>  // kRollupTreeDepth
 #include <libxrpl/zkp/rollup/BabyJubjub.h>
 #include <libxrpl/zkp/rollup/PoseidonHash.h>
@@ -20,17 +19,25 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
+uint256
+emptyAccountTreeRoot(std::size_t depth)
+{
+    PoseidonHash::initialize();
+    // Leaf-0 convention: an empty leaf is FieldT(0); fold Poseidon up `depth`
+    // levels over an all-empty tree. Matches BatchCircuit / the test trees.
+    FieldT cur = FieldT::zero();
+    for (std::size_t i = 0; i < depth; ++i)
+        cur = PoseidonHash::hash(cur, cur);
+    return PoseidonHash::fieldToUint256(cur);
+}
+
 uint256 const&
 kGenesisRollup2Root()
 {
-    // Root of an EMPTY account tree — Track 2 leaves are created on demand,
-    // so batch 1's prevRoot is the all-unoccupied root. Derived from the
-    // same RollupMerkleTree doApply replays, so the two always agree.
     static uint256 const root = []() {
         PoseidonHash::initialize();
         BabyJubjub::initialize();
-        RollupMerkleTree tree(kRollupTreeDepth);
-        return tree.root();
+        return emptyAccountTreeRoot(kRollupTreeDepth);
     }();
     return root;
 }
@@ -91,33 +98,8 @@ RollupState2::createGenesis(
     sle->setFieldU8(sfRollupTreeDepth, kRollupTreeDepth);
     sle->setFieldU32(sfOwnerCount, 0);
 
-    // EMPTY tree — no pre-loaded leaves (the Track 2 growable-tree property).
-    RollupMerkleTree tree(kRollupTreeDepth);
-    storeTree(*sle, tree);
-
     view.insert(sle);
     return sle;
-}
-
-std::unique_ptr<RollupMerkleTree>
-RollupState2::loadTree(STLedgerEntry const& sle)
-{
-    auto const depth = sle.getFieldU8(sfRollupTreeDepth);
-    auto tree = std::make_unique<RollupMerkleTree>(depth);
-
-    if (sle.isFieldPresent(sfTreeFrontier))
-    {
-        auto const blob = sle.getFieldVL(sfTreeFrontier);
-        if (!blob.empty())
-            tree->deserialiseFrontier(blob);
-    }
-    return tree;
-}
-
-void
-RollupState2::storeTree(STLedgerEntry& sle, RollupMerkleTree const& tree)
-{
-    sle.setFieldVL(sfTreeFrontier, tree.serialiseFrontier());
 }
 
 }  // namespace rollup

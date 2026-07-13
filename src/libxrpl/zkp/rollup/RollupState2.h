@@ -5,9 +5,16 @@
 
     Phase 6 — Track 2 (Option A) rollup state SLE.
 
-    Independent of Track 1's RollupState: separate keylet (rollup_state2),
-    an ACCOUNT-leaf tree that starts EMPTY and grows (leaves created on
-    demand), and the batch counter / root for the single-proof batches.
+    Independent of Track 1's RollupState: separate keylet (rollup_state2) and
+    a batch counter / account-tree root. The account tree lives OFF-CHAIN with
+    the sequencer (rebuildable from published entries); L1 stores only the
+    root and counter, so there is no on-chain tree/frontier here.
+
+    Empty-leaf convention: leaf = FieldT(0), so the empty-tree root is Poseidon
+    applied `depth` times to zero (P^depth(0)) — matching BatchCircuit. This is
+    deliberately DIFFERENT from Track 1's RollupMerkleTree, which uses empty
+    leaf = Poseidon(0,0). Keeping Track 2 on the circuit's convention is what
+    makes genesis / sequencer / circuit roots agree.
 */
 //==============================================================================
 
@@ -29,12 +36,12 @@ class ReadView;
 namespace zkp {
 namespace rollup {
 
-class RollupMerkleTree;
+// Empty account-tree root at the given depth under the leaf-0 convention:
+// P^depth(0). Matches BatchCircuit; used for genesis and by the sequencer.
+uint256
+emptyAccountTreeRoot(std::size_t depth);
 
-// The genesis root of an EMPTY account tree at the given depth (all leaves
-// unoccupied). This is the prevRoot the sequencer must use for batch 1, and
-// what preclaim checks when no RollupState2 SLE exists yet. Derived from an
-// empty RollupMerkleTree so it stays consistent with doApply's replay.
+// The genesis prevRoot for batch 1 (empty tree at kRollupTreeDepth).
 uint256 const&
 kGenesisRollup2Root();
 
@@ -54,18 +61,12 @@ public:
     static std::shared_ptr<STLedgerEntry>
     peek(ApplyView& view);
 
-    // Creates the Track 2 state SLE with an EMPTY account tree (no
-    // pre-loaded leaves — Track 2 leaves are created on demand). Runs once
-    // in a network's lifetime.
+    // Creates the Track 2 state SLE with the empty-tree genesis root. Runs
+    // once in a network's lifetime. No tree/frontier is stored (Track 2
+    // keeps the tree off-chain).
     static std::shared_ptr<STLedgerEntry>
     createGenesis(ApplyView& view,
                   std::vector<std::uint8_t> const& sequencerPubKey);
-
-    static std::unique_ptr<RollupMerkleTree>
-    loadTree(STLedgerEntry const& sle);
-
-    static void
-    storeTree(STLedgerEntry& sle, RollupMerkleTree const& tree);
 };
 
 }  // namespace rollup
