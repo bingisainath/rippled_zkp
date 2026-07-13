@@ -55,6 +55,11 @@ RPC_URL="http://127.0.0.1:${PORT}"
 KILL_TOKEN="${CFG}"
 RESULTS_JSON="${WORK_DIR}/results.json"
 
+# --keep-up: leave the node running after the demo so you can query both rollup
+# states live during Q&A (e.g. ledger_data on :${PORT}). Default: stop + clean up.
+KEEP_UP=0
+for _a in "$@"; do [[ "$_a" == "--keep-up" ]] && KEEP_UP=1; done
+
 GENESIS_ACCT="rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 GENESIS_SECRET="snoPBrXtMeMyMHUVTgbuqAfg1SUTb"
 ZKR_HASH="E0BED425F9FA5F184F68156A07EB8EF25B03245EFA08F3F71EBA31C7EE74BCBF"     # ZKRollup
@@ -187,8 +192,9 @@ PYEOF
 # Track 1 proof-region bytes: header is 76, proofSize is a u32 LE at offset 72.
 track1_proof_bytes() { python3 -c "b=bytes.fromhex('$1'); print(int.from_bytes(b[72:76],'little'))"; }
 
-# Always stop the node and drop the throwaway db dir on exit.
-trap 'stop_node; rm -rf "${DB_DIR}" 2>/dev/null || true' EXIT
+# On exit: stop the node + drop the throwaway db dir, UNLESS --keep-up was asked
+# (then leave it running for live inspection; a clean fail still tears down).
+trap '[[ "$KEEP_UP" == "1" ]] || { stop_node; rm -rf "${DB_DIR}" 2>/dev/null; } || true' EXIT
 
 # ─── preflight ──────────────────────────────────────────────
 [[ -x "$RIPPLED"   ]] || fail "rippled not found at $RIPPLED"
@@ -289,6 +295,31 @@ printf '\n'
 ok "Track 2 L1 verification is ${SPEEDUP} faster; blob is ${BLOB_SAVE} smaller."
 info "(L1 verify time is the headline: it is what every validator pays per batch.)"
 
+# ─── 4b. on-chain evidence: two independent rollups, one ledger ──
+hdr "STEP 4b — On-chain evidence (how to tell the two tracks apart)"
+info "Each track submitted a DIFFERENT transaction type and wrote its OWN state"
+info "object. Below are the two live RollupState entries — different ledger keys,"
+info "different roots — proving Track 1 and Track 2 coexist on the same ledger."
+rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
+| python3 -c "
+import sys, json
+t1='${T1_NEW_ROOT}'.lower(); t2='${T2_NEW_ROOT}'.lower()
+d=json.load(sys.stdin)
+rows=[n for n in d.get('result',{}).get('state',[]) if n.get('LedgerEntryType')=='RollupState']
+print()
+print('  %-9s %-13s %-14s %s' % ('track','tx type','ledger key','RollupRoot'))
+print('  %-9s %-13s %-14s %s' % ('-'*7,'-'*8,'-'*12,'-'*20))
+for n in rows:
+    root=n.get('RollupRoot','').lower()
+    if root==t1: tr,tt='Track 1','BatchRollup'
+    elif root==t2: tr,tt='Track 2','BatchRollup2'
+    else: tr,tt='?','?'
+    print('  %-9s %-13s %-14s %s' % (tr, tt, n.get('index','?')[:12]+'…', n.get('RollupRoot','?')))
+print()
+"
+info "Same LedgerEntryType (\"RollupState\") but DIFFERENT ledger keys → two"
+info "separate rollups. The definitive tell is the tx type: 61 vs 62."
+
 # ─── 5. JSON for the dashboard ──────────────────────────────
 python3 - <<PYEOF
 import json
@@ -381,5 +412,14 @@ print("wrote ${RESULTS_HTML}")
 PYEOF
 ok "Results page: ${RESULTS_HTML}  (open in a browser)"
 
-stop_node
-hdr "Done — node stopped. Re-run any time; outputs live under ${WORK_DIR}"
+if [[ "$KEEP_UP" == "1" ]]; then
+    hdr "Done — node LEFT RUNNING on :${PORT} for live inspection"
+    info "Query both rollups live, e.g.:"
+    info "  curl -s -X POST http://127.0.0.1:${PORT} -H 'Content-Type: application/json' \\"
+    info "    --data '{\"method\":\"ledger_data\",\"params\":[{\"ledger_index\":\"current\",\"limit\":400}]}' \\"
+    info "    | python3 -m json.tool | grep -A6 RollupState"
+    info "Stop it when done:  pkill -f '${CFG}'"
+else
+    stop_node
+    hdr "Done — node stopped. Re-run any time; outputs live under ${WORK_DIR}"
+fi
