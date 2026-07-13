@@ -236,6 +236,12 @@ if(xrpld)
     Ripple::libs
     xrpl.libxrpl
   )
+  # xrpl.libxrpl now bundles the rollup transactor objects (ZkDeposit.o,
+  # BatchVerifier*.o), which reference Transactor symbols defined only in the
+  # rippled executable — code this tool never calls. Tolerate those unresolved
+  # refs so the tool links against libxrpl alone (see gen_batch_blob2 below).
+  target_link_options(gen_batch_blob PRIVATE
+    -Wl,--unresolved-symbols=ignore-all)
 
   # ── gen_batch_blob2 — Track 2 (Option A) single-proof batch blob ──────────
   add_executable(gen_batch_blob2
