@@ -77,6 +77,23 @@ public:
     std::optional<AccountView>
     account(FieldT const& apkX) const;
 
+    // Every account the sequencer knows, for reporting. READ-ONLY: it must not
+    // mutate state or advance a nonce, because the demo calls it between
+    // batches to show what moved off-chain.
+    //
+    // These figures live in the sequencer's memory, NOT on L1 — the ledger
+    // stores only the root and cannot see them. The proof is what makes this
+    // report non-repudiable.
+    struct AccountReport
+    {
+        uint256 apkX;
+        std::size_t index;
+        std::uint64_t balance;
+        std::uint64_t nonce;
+    };
+    std::vector<AccountReport>
+    accounts() const;
+
 private:
     struct Account
     {

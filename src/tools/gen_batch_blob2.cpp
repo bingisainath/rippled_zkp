@@ -79,6 +79,57 @@ userKey(std::size_t i)
     return FieldT("770000110022003300") + FieldT(i);
 }
 
+// What a deposit for demo user `i` will look like. SINGLE SOURCE OF TRUTH for
+// both QUOTE and PROVE — they must never drift, because L1 now requires each
+// Deposit entry to match a queued ttROLLUP_DEPOSIT2 claim on BOTH apk_x and
+// drops exactly. If QUOTE reported one amount and PROVE built another, the
+// batch would be rejected with tecFAILED_PROCESSING.
+//
+// The nonce is read from the sequencer's own account view (0 for a leaf that
+// does not exist yet, else the current nonce). Reading does not mutate, so
+// QUOTE is side-effect free.
+struct DepositSpec
+{
+    FieldT key;
+    FieldT apkX;
+    std::uint64_t drops;
+    std::uint64_t nonce;
+};
+
+// `userOffset` shifts WHICH leaves are credited without changing the amounts:
+// drops depends on the slot index, not the user. That separation is what lets
+// the demo isolate the attribution guard — a batch crediting the wrong leaf for
+// the RIGHT amount passes the aggregate check and can only be caught by the
+// per-claim apk_x match. Default 0 reproduces the original behaviour exactly.
+std::vector<DepositSpec>
+depositSpecs(
+    ripple::zkp::rollup::RollupSequencer2 const& seq,
+    std::uint32_t nDeposits,
+    std::uint32_t userOffset = 0)
+{
+    std::vector<DepositSpec> out;
+    out.reserve(nDeposits);
+    for (std::uint32_t i = 0; i < nDeposits; ++i)
+    {
+        DepositSpec s;
+        s.key = userKey(userOffset + i);
+        s.apkX = EdDSA::derivePublicKey(s.key).x;
+        s.drops = 1'000'000 + i;
+        s.nonce = 0;
+        if (auto av = seq.account(s.apkX))
+            s.nonce = av->nonce;
+        out.push_back(s);
+    }
+    return out;
+}
+
+// Default withdrawal payout target: the standalone node's genesis account.
+// It always exists, so a withdrawal credits it rather than trying to create
+// an AccountRoot that would need to clear accountReserve.
+ripple::AccountID const kGenesisAccount =
+    *ripple::parseBase58<ripple::AccountID>(
+        "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
+
 }  // namespace
 
 int
@@ -101,6 +152,264 @@ main(int argc, char** argv)
         std::cerr << "[gen_batch_blob2] keys ready ("
                   << BatchCircuitProver::constraintCount()
                   << " constraints).\n";
+        return 0;
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "--serve")
+    {
+        // Resident prover daemon (what a production sequencer does): pay the
+        // startup cost ONCE — curve init + deserialising the ~78 MB proving
+        // key — then answer PROVE commands over stdin. Per-batch cost drops
+        // to the pure prove step (~38-40 s at depth 16 on this VM).
+        //
+        // Because the RollupSequencer2 instance persists across commands, its
+        // account tree chains naturally: PROVE n, PROVE n+1, … produce batches
+        // whose prevRoot/newRoot link up, so multi-batch demos work without
+        // restarting the node. Deposit nonces are read from the sequencer's
+        // own account view (0 for a new account, else the current leaf nonce).
+        //
+        // Protocol (line-based):
+        //   in : PROVE <deposits 0..8> <batchId> [withdrawals 0..8] [destB58]
+        //   out: the same KEY=value block as one-shot mode, then "END"
+        //   in : QUOTE <deposits 0..8> <batchId>
+        //   out: CLAIM=<apk_x hex>,<drops>  (one per deposit, in order), "END"
+        //   in : BALANCES
+        //   out: ACCT=<apk_x hex>,<index>,<balance>,<nonce>  (one per account)
+        //        ROOT=<hex>, then "END"
+        //   in : EXIT   (or EOF)  → quit
+        //
+        // QUOTE exists because deposits are now BACKED: a batch may credit an
+        // L2 leaf only if a ttROLLUP_DEPOSIT2 already escrowed real XRP naming
+        // that exact apk_x and amount. The shell cannot compute apk_x (Baby
+        // Jubjub arithmetic lives here), so it asks first, submits the L1
+        // deposits verbatim, and only then calls PROVE.
+        //
+        // Deposits are drawn from users 0..d-1 and withdrawals from users
+        // d..d+w-1, so the two sets are disjoint: a user cannot appear twice
+        // in one batch, because both requests would carry the same nonce and
+        // the second would fail admission. Withdrawals therefore only succeed
+        // for users a PRIOR batch already funded — which is the point of the
+        // 8-deposit → 4-withdraw → 4+4 mixed demo sequence.
+        //
+        // destB58 defaults to the genesis account: it already exists on a
+        // standalone node, so the withdrawal credits an existing AccountRoot
+        // and never trips the accountReserve floor that creating a fresh
+        // destination would (tecNO_DST_INSUF_XRP for sub-reserve values).
+        std::cerr << "[gen_batch_blob2] --serve: loading Groth16 keys once…\n";
+        BatchCircuitProver::initialize(
+            BatchCircuitProver::defaultKeyPath(), 8, kDepth);
+        RollupSequencer2 seq(kDepth);
+        std::cout << "READY constraints="
+                  << BatchCircuitProver::constraintCount() << "\n"
+                  << std::flush;
+
+        std::string line;
+        while (std::getline(std::cin, line))
+        {
+            std::istringstream is(line);
+            std::string cmd;
+            is >> cmd;
+            if (cmd == "EXIT")
+                break;
+
+            // QUOTE <deposits 0..8> <batchId>
+            //
+            // Report what a subsequent PROVE will credit, WITHOUT proving.
+            // The shell needs this because apk_x comes from Baby Jubjub curve
+            // arithmetic that exists only here — it cannot derive the claim
+            // values itself, and L1 now requires them to match exactly.
+            //
+            // Side-effect free: depositSpecs only reads the account view.
+            if (cmd == "QUOTE")
+            {
+                std::uint32_t qDeposits = 0, qBid = 0, qOffset = 0;
+                if (!(is >> qDeposits >> qBid) || qDeposits > BATCH2_SIZE)
+                {
+                    std::cout << "ERROR=expected: QUOTE <deposits 0..8> "
+                                 "<batchId> [userOffset]\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                is >> qOffset;  // optional; lets a caller quote leaves OUTSIDE
+                                // the range a normal batch credits, so a demo
+                                // claim cannot collide with the real flow
+                for (auto const& s : depositSpecs(seq, qDeposits, qOffset))
+                {
+                    std::cout
+                        << "CLAIM="
+                        << ripple::to_string(
+                               PoseidonHash::fieldToUint256(s.apkX))
+                        << "," << s.drops << "\n";
+                }
+                std::cout << "END\n" << std::flush;
+                continue;
+            }
+
+            // BALANCES — the sequencer's OFF-CHAIN account state.
+            //
+            // L1 stores only the root and cannot see these figures; the proof
+            // is what makes this report non-repudiable. Read-only.
+            if (cmd == "BALANCES")
+            {
+                for (auto const& a : seq.accounts())
+                {
+                    std::cout << "ACCT=" << ripple::to_string(a.apkX) << ","
+                              << a.index << "," << a.balance << ","
+                              << a.nonce << "\n";
+                }
+                std::cout << "ROOT=" << ripple::to_string(seq.root()) << "\n"
+                          << "END\n"
+                          << std::flush;
+                continue;
+            }
+
+            std::uint32_t nDeposits = 0, bid = 0, nWithdrawals = 0;
+            std::uint32_t userOffset = 0;
+            bool allowEmpty = false;
+            std::string destB58;
+
+            // BOOTSTRAP <batchId> — a NoOp-only batch. It anchors the
+            // sequencer key and the escrow account on L1 without crediting any
+            // L2 balance, which backed deposits require before the first
+            // ttROLLUP_DEPOSIT2 can be accepted. A NoOp leaves its slot empty,
+            // so this does NOT move the root.
+            if (cmd == "BOOTSTRAP")
+            {
+                if (!(is >> bid))
+                {
+                    std::cout << "ERROR=expected: BOOTSTRAP <batchId>\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                allowEmpty = true;
+            }
+            // PROVE_MISATTR <batchId> — DEMO ONLY. Builds a one-deposit batch
+            // crediting user 5 for exactly the amount user 0's claim carries.
+            // The totals still balance, so the aggregate check passes; only the
+            // per-claim apk_x match can reject it. This is the misattribution
+            // attack: the depositor paid naming their own leaf, the sequencer
+            // credited a different one.
+            else if (cmd == "PROVE_MISATTR")
+            {
+                if (!(is >> bid))
+                {
+                    std::cout << "ERROR=expected: PROVE_MISATTR <batchId>\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                nDeposits = 1;
+                userOffset = 5;
+            }
+            else if (cmd != "PROVE" || !(is >> nDeposits >> bid))
+            {
+                std::cout << "ERROR=expected: PROVE <deposits 0..8> <batchId> "
+                             "[withdrawals 0..8] [destB58] | BOOTSTRAP "
+                             "<batchId> | PROVE_MISATTR <batchId> | QUOTE "
+                             "<deposits> <batchId> | BALANCES | EXIT\n"
+                          << "END\n"
+                          << std::flush;
+                continue;
+            }
+            else
+            {
+                is >> nWithdrawals;  // optional; leaves 0 on absence
+                is >> destB58;       // optional; empty on absence
+            }
+
+            std::uint32_t const total = nDeposits + nWithdrawals;
+            if ((total < 1 && !allowEmpty) || total > BATCH2_SIZE)
+            {
+                std::cout << "ERROR=deposits+withdrawals must be 1.."
+                          << BATCH2_SIZE << " (got " << total << ")\n"
+                          << "END\n"
+                          << std::flush;
+                continue;
+            }
+
+            ripple::AccountID dest = kGenesisAccount;
+            if (!destB58.empty())
+            {
+                auto parsed = ripple::parseBase58<ripple::AccountID>(destB58);
+                if (!parsed)
+                {
+                    std::cout << "ERROR=bad destination account: " << destB58
+                              << "\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                dest = *parsed;
+            }
+
+            std::vector<SequencerRequest> reqs;
+            for (auto const& s : depositSpecs(seq, nDeposits, userOffset))
+            {
+                SequencerRequest sr;
+                sr.req = SignedRequest::make(
+                    s.key, s.apkX, s.drops, s.nonce, RequestType::Deposit);
+                reqs.push_back(sr);
+            }
+            for (std::uint32_t i = 0; i < nWithdrawals; ++i)
+            {
+                std::uint32_t const u = nDeposits + i;
+                SequencerRequest sr;
+                BjjPoint apk = EdDSA::derivePublicKey(userKey(u));
+                auto av = seq.account(apk.x);
+                if (!av || av->balance == 0)
+                {
+                    std::cout << "ERROR=user " << u
+                              << " has no L2 balance to withdraw — fund it in "
+                                 "an earlier batch first\n"
+                              << "END\n"
+                              << std::flush;
+                    reqs.clear();
+                    break;
+                }
+                // Withdraw half the balance so the leaf survives for later
+                // batches; the signed `dest` must encode the L1 payout target
+                // (AccountLeaf.h canonical encoding) or preflight rejects it.
+                sr.destination = dest;
+                sr.req = SignedRequest::make(
+                    userKey(u),
+                    accountIdToField(dest),
+                    av->balance / 2,
+                    av->nonce,
+                    RequestType::Withdraw);
+                reqs.push_back(sr);
+            }
+            // BOOTSTRAP legitimately has no requests — buildBatch pads all 8
+            // slots with NoOps. Any other command reaching here empty hit the
+            // withdrawal-admission error above and already reported it.
+            if (reqs.empty() && !allowEmpty)
+                continue;
+
+            std::cerr << "[gen_batch_blob2] PROVE batch " << bid << " ("
+                      << nDeposits << " deposits, " << nWithdrawals
+                      << " withdrawals) — key already resident, "
+                         "pure proving…\n";
+            auto bp = seq.buildBatch(reqs, bid);
+            if (!bp)
+            {
+                std::cout << "ERROR=buildBatch failed (admission or prover)\n"
+                          << "END\n"
+                          << std::flush;
+                continue;
+            }
+            auto const blob = bp->serialize();
+            std::cout << "BLOB=" << toHex(blob) << "\n"
+                      << "PUB=" << toHex(seq.publicKey()) << "\n"
+                      << "PREV_ROOT=" << toHex(bp->prevRoot) << "\n"
+                      << "NEW_ROOT=" << toHex(bp->newRoot) << "\n"
+                      << "BATCH_ID=" << bp->batchId << "\n"
+                      << "TX_COUNT=" << bp->txCount << "\n"
+                      << "DEPOSITS=" << nDeposits << "\n"
+                      << "WITHDRAWALS=" << nWithdrawals << "\n"
+                      << "END\n"
+                      << std::flush;
+        }
         return 0;
     }
 

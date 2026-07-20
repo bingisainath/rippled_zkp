@@ -49,6 +49,19 @@ RollupSequencer2::account(FieldT const& apkX) const
     return std::nullopt;
 }
 
+std::vector<RollupSequencer2::AccountReport>
+RollupSequencer2::accounts() const
+{
+    std::vector<AccountReport> out;
+    out.reserve(accounts_.size());
+    // accounts_ is keyed by fieldToUint256(apk_x), so iteration order is by
+    // that key — stable across calls, which keeps the demo's before/after
+    // tables aligned.
+    for (auto const& [key, a] : accounts_)
+        out.push_back({key, a.index, a.balance, a.nonce});
+    return out;
+}
+
 uint256
 RollupSequencer2::root() const
 {
@@ -108,6 +121,19 @@ RollupSequencer2::buildBatch(
     std::vector<SequencerRequest> const& requests,
     std::uint32_t batchId)
 {
+    // Ordering contract with the L1 deposit queue: NONE required.
+    //
+    // BatchRollup2::preclaim matches each Deposit entry against outstanding
+    // claims on (apk_x, drops) without regard to position, so the sequencer
+    // may batch deposits in any order and may skip a claim whose depositor has
+    // not yet sent a signed L2 request. What it may NOT do is credit a leaf no
+    // claim names, or credit an amount no claim escrowed — either makes the
+    // batch unprovable at L1.
+    //
+    // A strict-FIFO rule was considered and rejected: a Deposit entry needs the
+    // depositor's in-circuit EdDSA signature, so one depositor who escrows and
+    // never follows up would stall the queue head and block deposits for
+    // everyone, permanently, for the price of one fee.
     if (requests.size() > BATCH2_SIZE)
         return std::nullopt;
 

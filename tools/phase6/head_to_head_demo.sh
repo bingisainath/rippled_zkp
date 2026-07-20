@@ -34,7 +34,10 @@ set -uo pipefail
 
 # ─── paths & config ─────────────────────────────────────────
 RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
-RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
+# build/main is the current tree. build/build/Release is a stale Jul-13 binary
+# that predates backed deposits, per-claim attribution and the withdrawal
+# guards — running against it would demo none of them.
+RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/main/rippled}"
 GEN1_TOOL="${GEN1_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"    # Track 1
 GEN2_TOOL="${GEN2_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob2}"   # Track 2
 
@@ -166,14 +169,18 @@ else:
 
 # submit a BatchRollup / BatchRollup2 tx; echoes engine_result. On any non-tes
 # result it also prints the engine_result_message to stderr for diagnosis.
-submit_batch() {  # txType blob pub batchId prevRoot newRoot txCount
+submit_batch() {  # txType blob pub batchId prevRoot newRoot txCount [acct] [secret]
     python3 - "$@" <<PYEOF
 import urllib.request, json, sys
 txtype, blob, pub, bid, prev, new, txc = sys.argv[1:8]
-tx = {"TransactionType":txtype,"Account":"${GENESIS_ACCT}",
+# Track 2 batches are submitted by ESCROW, not genesis: the bootstrap
+# submitter becomes the anchored escrow account, and withdrawals pay out of it.
+acct   = sys.argv[8] if len(sys.argv) > 8 else "${GENESIS_ACCT}"
+secret = sys.argv[9] if len(sys.argv) > 9 else "${GENESIS_SECRET}"
+tx = {"TransactionType":txtype,"Account":acct,
       "BatchId":int(bid),"PrevRoot":prev,"RollupRoot":new,"TxCount":int(txc),
       "SequencerPubKey":pub,"BatchProof":blob}
-body = json.dumps({"method":"submit","params":[{"tx_json":tx,"secret":"${GENESIS_SECRET}"}]})
+body = json.dumps({"method":"submit","params":[{"tx_json":tx,"secret":secret}]})
 req = urllib.request.Request("${RPC_URL}", data=body.encode(),
                              headers={"Content-Type":"application/json"})
 try:
@@ -186,6 +193,140 @@ try:
         print(res)
 except Exception as e:
     print(f"RPC_ERROR:{e}", file=sys.stderr); sys.exit(1)
+PYEOF
+}
+
+# ─── Track 2 backed-deposit helpers ─────────────────────────
+
+# Create a funded account. Returns "address secret".
+make_account() {  # $1 = drops to fund
+    local out addr secret
+    out="$(rpc '{"method":"wallet_propose","params":[{}]}' \
+      | python3 -c "import sys,json;r=json.load(sys.stdin)['result'];print(r['account_id'],r['master_seed'])")"
+    addr="${out%% *}"; secret="${out##* }"
+    python3 - "$addr" "$1" <<PYEOF >/dev/null
+import urllib.request, json, sys
+addr, amt = sys.argv[1], sys.argv[2]
+tx = {"TransactionType":"Payment","Account":"${GENESIS_ACCT}",
+      "Destination":addr,"Amount":amt}
+body = json.dumps({"method":"submit","params":[{"tx_json":tx,"secret":"${GENESIS_SECRET}"}]})
+req = urllib.request.Request("${RPC_URL}", data=body.encode(),
+                             headers={"Content-Type":"application/json"})
+urllib.request.urlopen(req, timeout=60).read()
+PYEOF
+    close_ledger
+    echo "$addr $secret"
+}
+
+# Balance in drops for an account (0 if it does not exist).
+bal_drops() {  # $1 = address
+    rpc "{\"method\":\"account_info\",\"params\":[{\"account\":\"$1\",\"ledger_index\":\"current\"}]}" 2>/dev/null \
+      | python3 -c "import sys,json
+try: print(json.load(sys.stdin)['result']['account_data']['Balance'])
+except Exception: print(0)"
+}
+
+# Phase 1 of the two-phase deposit. apk_x and amount come VERBATIM from QUOTE —
+# L1 requires the batch's Deposit entry to match a queued claim on BOTH.
+submit_deposit() {  # $1 apk_x  $2 drops  $3 depositor  $4 secret  $5 escrow
+    python3 - "$@" <<PYEOF
+import urllib.request, json, sys
+apk, drops, acct, secret, escrow = sys.argv[1:6]
+tx = {"TransactionType":"RollupDeposit2","Account":acct,
+      "Destination":escrow,"Amount":drops,"DepositApk":apk}
+body = json.dumps({"method":"submit","params":[{"tx_json":tx,"secret":secret}]})
+req = urllib.request.Request("${RPC_URL}", data=body.encode(),
+                             headers={"Content-Type":"application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        print(json.load(resp).get("result", {}).get("engine_result","RPC_NO_RESULT"))
+except Exception as e:
+    print(f"RPC_ERROR:{e}", file=sys.stderr); sys.exit(1)
+PYEOF
+}
+
+# Resident sequencer daemon. Keeping it up means the ~78 MB proving key is
+# deserialised once; per-batch cost is then the pure prove step.
+SERVE_IN="${WORK_DIR}/serve_in.$$"
+SERVE_OUT="${WORK_DIR}/serve_out.$$"
+SERVE_PID=""
+
+serve_start() {
+    serve_stop
+    rm -f "$SERVE_IN" "$SERVE_OUT"; mkfifo "$SERVE_IN" "$SERVE_OUT"
+    "$GEN2_TOOL" --serve < "$SERVE_IN" > "$SERVE_OUT" 2>"${WORK_DIR}/serve.log" &
+    SERVE_PID=$!
+    exec 3>"$SERVE_IN"; exec 4<"$SERVE_OUT"
+    local line
+    while IFS= read -r line <&4; do [[ "$line" == READY* ]] && break; done
+}
+
+serve_stop() {
+    [[ -n "$SERVE_PID" ]] || return 0
+    echo "EXIT" >&3 2>/dev/null || true
+    exec 3>&- 2>/dev/null || true; exec 4<&- 2>/dev/null || true
+    wait "$SERVE_PID" 2>/dev/null || true
+    SERVE_PID=""; rm -f "$SERVE_IN" "$SERVE_OUT"
+}
+
+# Send a command, echo every line up to (not including) END.
+serve_cmd() {
+    echo "$*" >&3
+    local line
+    while IFS= read -r line <&4; do
+        [[ "$line" == "END" ]] && break
+        printf '%s\n' "$line"
+    done
+}
+
+# Combined off-chain (L2) / on-chain (L1) before-and-after table.
+#   $1 label  $2 before-BALANCES file  $3 after-BALANCES file
+balance_table() {
+    python3 - "$1" "$2" "$3" "$(bal_drops "$ESCROW_ADDR")" "$ESCROW_L1_BEFORE" \
+                 "$(bal_drops "$PAYEE_ADDR")" "$PAYEE_L1_BEFORE" <<'PYEOF'
+import sys
+label, fb, fa, esc_now, esc_before, pay_now, pay_before = sys.argv[1:8]
+
+def parse(p):
+    acc, root = {}, ''
+    for ln in open(p):
+        ln = ln.strip()
+        if ln.startswith('ACCT='):
+            apk, idx, bal, nonce = ln[5:].split(',')
+            acc[apk] = (int(idx), int(bal), int(nonce))
+        elif ln.startswith('ROOT='):
+            root = ln[5:]
+    return acc, root
+
+b, rb = parse(fb)
+a, ra = parse(fa)
+xrp = lambda d: f"{int(d)/1_000_000:.2f} XRP"
+
+print()
+print(f"  {label}")
+print(f"  {'account':<12} {'L2 balance (OFF-CHAIN)':<28} {'nonce':<10} {'L1'}")
+print(f"  {'-'*12} {'-'*28} {'-'*10} {'-'*22}")
+
+byidx = sorted(set(b) | set(a), key=lambda k: (a.get(k) or b.get(k))[0])
+for k in byidx:
+    ob = b.get(k); na = a.get(k)
+    idx = (na or ob)[0]
+    bb = f"{ob[1]:,}" if ob else "—"
+    ab = f"{na[1]:,}" if na else "—"
+    nb = str(ob[2]) if ob else "—"
+    an = str(na[2]) if na else "—"
+    bal = f"{bb} → {ab}" if bb != ab else bb
+    non = f"{nb} → {an}" if nb != an else nb
+    print(f"  {'user '+str(idx):<12} {bal:<28} {non:<10} {'—'}")
+
+print(f"  {'ESCROW':<12} {'—':<28} {'—':<10} {xrp(esc_before)} → {xrp(esc_now)}")
+print(f"  {'PAYEE':<12} {'—':<28} {'—':<10} {xrp(pay_before)} → {xrp(pay_now)}")
+print(f"  {'RollupRoot':<12} {rb[:8]}… → {ra[:8]}…")
+print()
+print("  L2 balances are reported by the SEQUENCER, from its own memory.")
+print("  L1 stores only the root and never sees these figures; the proof is")
+print("  what makes the sequencer's report non-repudiable.")
+print()
 PYEOF
 }
 
@@ -257,11 +398,149 @@ T1_SUBMIT_MS="$(elapsed_ms "$S0" "$S1")"
 close_ledger
 ok "Track 1 accepted → ${T1_RES}   L1 verify = ${T1_SUBMIT_MS} ms   RollupState = $(get_rollup_state "$T1_NEW_ROOT")"
 
-# ─── 3. Track 2 — one monolithic proof ──────────────────────
+# ─── 3. Track 2 — backed deposits, then one monolithic proof ─
+hdr "STEP 3a — Track 2: three distinct L1 accounts"
+info "Genesis funds an ESCROW (batch submitter → anchored escrow account),"
+info "a PAYEE (withdrawal target) and a DEPOSITOR. Using genesis for all three"
+info "would make the withdrawal legs cancel and show only a 10-drop fee."
+read -r ESCROW_ADDR ESCROW_SECRET <<<"$(make_account 50000000)"
+read -r PAYEE_ADDR  PAYEE_SECRET  <<<"$(make_account 10000000)"
+read -r DEPOSITOR_ADDR DEPOSITOR_SECRET <<<"$(make_account 60000000)"
+ok "ESCROW=${ESCROW_ADDR} ($(bal_drops "$ESCROW_ADDR") drops)"
+ok "PAYEE =${PAYEE_ADDR} ($(bal_drops "$PAYEE_ADDR") drops)"
+ok "DEPOSITOR=${DEPOSITOR_ADDR} ($(bal_drops "$DEPOSITOR_ADDR") drops)"
+
+serve_start
+ok "Sequencer daemon resident (proving key loaded once)."
+
+hdr "STEP 3b — Bootstrap batch (NoOp only): anchor the escrow account"
+info "Backed deposits require the escrow to be anchored BEFORE the first"
+info "ttROLLUP_DEPOSIT2 — otherwise the first depositor could nominate an"
+info "escrow they control. A NoOp batch anchors it without crediting any L2"
+info "balance, and leaves the root unmoved."
+BOOT="$(serve_cmd BOOTSTRAP 1)"
+eval "$(echo "$BOOT" | grep -E '^(BLOB|PUB|PREV_ROOT|NEW_ROOT|BATCH_ID|TX_COUNT)=' | sed 's/^/B_/')"
+BOOT_RES="$(submit_batch BatchRollup2 "$B_BLOB" "$B_PUB" "$B_BATCH_ID" "$B_PREV_ROOT" "$B_NEW_ROOT" "${B_TX_COUNT:-8}" "$ESCROW_ADDR" "$ESCROW_SECRET")"
+[[ "$BOOT_RES" == "tesSUCCESS" ]] || fail "bootstrap batch → $BOOT_RES (expected tesSUCCESS)"
+close_ledger
+ok "Bootstrap accepted → ${BOOT_RES}   escrow anchored to ${ESCROW_ADDR}"
+[[ "$B_PREV_ROOT" == "$B_NEW_ROOT" ]] \
+  && ok "Root unchanged by the bootstrap (all-NoOp batch): ${B_NEW_ROOT:0:16}…" \
+  || warn "bootstrap moved the root — unexpected for an all-NoOp batch"
+
+# ─── rejection demos ────────────────────────────────────────
+# These MUST run before any successful deposit batch. buildBatch mutates the
+# sequencer on success — the proof is valid, only L1 refuses — so a rejected
+# batch leaves the sequencer's tree ahead of L1. Restarting the daemon resyncs,
+# but only because L1's root has not moved (the bootstrap was all NoOps).
+hdr "STEP 3c — REJECTION 1: unbacked credit (no L1 payment)"
+info "Nothing has been escrowed. The sequencer proves a perfectly valid batch"
+info "crediting 1 XRP to an L2 leaf — the Groth16 proof verifies — but no L1"
+info "account ever paid for it."
+UB="$(serve_cmd PROVE 1 2)"
+eval "$(echo "$UB" | grep -E '^(BLOB|PUB|PREV_ROOT|NEW_ROOT|BATCH_ID|TX_COUNT)=' | sed 's/^/U_/')"
+UB_RES="$(submit_batch BatchRollup2 "$U_BLOB" "$U_PUB" "$U_BATCH_ID" "$U_PREV_ROOT" "$U_NEW_ROOT" "${U_TX_COUNT:-8}" "$ESCROW_ADDR" "$ESCROW_SECRET")"
+close_ledger
+if [[ "$UB_RES" == "tecINSUF_RESERVE_LINE" ]]; then
+    ok "engine_result = ${UB_RES}  —  no L1 payment, no L2 balance."
+else
+    fail "unbacked batch → ${UB_RES} (expected tecINSUF_RESERVE_LINE)"
+fi
+serve_cmd BALANCES > "${WORK_DIR}/bal_after_rej1.txt"
+info "Ledger state after rejection (pool balance must be absent/zero):"
+rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
+| python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for n in d.get('result',{}).get('state',[]):
+    if n.get('LedgerEntryType')=='RollupState' and 'PendingDeposits' in json.dumps(n):
+        print('   pool Balance =', n.get('Balance','(absent)'),
+              '  PendingDeposits =', n.get('PendingDeposits','(absent)'),
+              '  claims =', len(n.get('DepositClaims',[])))
+"
+serve_start   # resync: the rejected batch advanced the sequencer, not L1
+
+hdr "STEP 3d — REJECTION 2: misattribution (paid by one, credited to another)"
+info "A depositor escrows real XRP naming THEIR leaf. The sequencer then builds"
+info "a batch crediting a DIFFERENT leaf for exactly the same amount — so the"
+info "totals still balance and the aggregate check passes."
+# Quote leaf 8 — OUTSIDE the 0..7 range the real batch credits — so this demo's
+# surviving claim cannot be confused with, or duplicate, a real one.
+MQ="$(serve_cmd QUOTE 1 2 8)"
+M_APK="$(echo "$MQ" | head -1 | sed 's/^CLAIM=//' | cut -d, -f1)"
+M_DROPS="$(echo "$MQ" | head -1 | sed 's/^CLAIM=//' | cut -d, -f2)"
+info "Claim escrowed: apk_x=${M_APK:0:16}…  amount=${M_DROPS} drops"
+MD_RES="$(submit_deposit "$M_APK" "$M_DROPS" "$DEPOSITOR_ADDR" "$DEPOSITOR_SECRET" "$ESCROW_ADDR")"
+[[ "$MD_RES" == "tesSUCCESS" ]] || fail "misattribution-demo deposit → $MD_RES"
+close_ledger
+MA="$(serve_cmd PROVE_MISATTR 2)"
+eval "$(echo "$MA" | grep -E '^(BLOB|PUB|PREV_ROOT|NEW_ROOT|BATCH_ID|TX_COUNT)=' | sed 's/^/M_/')"
+MA_RES="$(submit_batch BatchRollup2 "$M_BLOB" "$M_PUB" "$M_BATCH_ID" "$M_PREV_ROOT" "$M_NEW_ROOT" "${M_TX_COUNT:-8}" "$ESCROW_ADDR" "$ESCROW_SECRET")"
+close_ledger
+if [[ "$MA_RES" == "tecFAILED_PROCESSING" ]]; then
+    ok "engine_result = ${MA_RES}  —  the depositor paid; the sequencer tried to"
+    ok "credit its own leaf; the ledger refused."
+else
+    fail "misattributed batch → ${MA_RES} (expected tecFAILED_PROCESSING)"
+fi
+serve_cmd BALANCES > "${WORK_DIR}/bal_after_rej2.txt"
+info "The claim SURVIVES — the depositor's money is still theirs to claim:"
+rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
+| python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for n in d.get('result',{}).get('state',[]):
+    if n.get('LedgerEntryType')=='RollupState' and 'DepositClaims' in n:
+        print('   PendingDeposits =', n.get('PendingDeposits'),
+              '  claims queued =', len(n.get('DepositClaims',[])),
+              '  pool Balance =', n.get('Balance','(absent)'))
+"
+serve_start   # resync again
+
+# ─── the real thing ─────────────────────────────────────────
+hdr "STEP 3e — QUOTE: ask the sequencer what it will credit"
+info "apk_x is Baby Jubjub curve arithmetic that exists only in C++, so the"
+info "shell cannot derive it. It asks first, then submits the L1 deposits with"
+info "the apk_x and amount taken VERBATIM."
+QUOTED="$(serve_cmd QUOTE 8 2)"
+echo "$QUOTED" | sed 's/^CLAIM=/   claim: /' | sed 's/,/  drops: /'
+NCLAIMS="$(echo "$QUOTED" | grep -c '^CLAIM=')"
+[[ "$NCLAIMS" == "8" ]] || fail "expected 8 claims from QUOTE, got ${NCLAIMS}"
+
+hdr "STEP 3f — Escrow: one ttROLLUP_DEPOSIT2 per claim (REAL XRP moves)"
+ESCROW_BEFORE_DEP="$(bal_drops "$ESCROW_ADDR")"
+DEPOSITOR_BEFORE="$(bal_drops "$DEPOSITOR_ADDR")"
+while IFS= read -r cl; do
+    apk="${cl#CLAIM=}"; drops="${apk#*,}"; apk="${apk%%,*}"
+    r="$(submit_deposit "$apk" "$drops" "$DEPOSITOR_ADDR" "$DEPOSITOR_SECRET" "$ESCROW_ADDR")"
+    [[ "$r" == "tesSUCCESS" ]] || fail "deposit for ${apk:0:12}… → $r"
+done < <(echo "$QUOTED" | grep '^CLAIM=')
+close_ledger
+ESCROW_AFTER_DEP="$(bal_drops "$ESCROW_ADDR")"
+ok "8 deposits escrowed. DEPOSITOR ${DEPOSITOR_BEFORE} → $(bal_drops "$DEPOSITOR_ADDR") drops"
+ok "ESCROW ${ESCROW_BEFORE_DEP} → ${ESCROW_AFTER_DEP} drops (+$((ESCROW_AFTER_DEP-ESCROW_BEFORE_DEP)))"
+info "Claims now queued on the RollupState SLE:"
+rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
+| python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for n in d.get('result',{}).get('state',[]):
+    if n.get('LedgerEntryType')=='RollupState' and 'DepositClaims' in n:
+        cl=n.get('DepositClaims',[])
+        print('   PendingDeposits =', n.get('PendingDeposits'), ' claims =', len(cl))
+        for c in cl[:3]:
+            e=c.get('DepositClaim',{})
+            print('     ', e.get('DepositApk','?')[:20]+'…', e.get('ClaimDrops'))
+        if len(cl)>3: print('      … and', len(cl)-3, 'more')
+"
+
 hdr "STEP 3 — Track 2 (tt=62): 8-deposit batch, ONE Groth16 proof"
+ESCROW_L1_BEFORE="$(bal_drops "$ESCROW_ADDR")"
+PAYEE_L1_BEFORE="$(bal_drops "$PAYEE_ADDR")"
+serve_cmd BALANCES > "${WORK_DIR}/bal_before_deposit.txt"
 info "Sequencer proving one monolithic batch proof…"
 U0="$(now)"
-GEN2="$("$GEN2_TOOL" --deposits 8 --batch-id 1 2>"${WORK_DIR}/gen_track2.log")" || fail "Track 2 gen failed (see gen_track2.log)"
+GEN2="$(serve_cmd PROVE 8 2)"
 U1="$(now)"
 GEN2_MS="$(elapsed_ms "$U0" "$U1")"
 eval "$(echo "$GEN2" | grep -E '^(BLOB|PUB|PREV_ROOT|NEW_ROOT|BATCH_ID|TX_COUNT)=' | sed 's/^/T2_/')"
@@ -270,12 +549,51 @@ T2_PROOF_BYTES=137   # fixed Groth16 proof size for the batch circuit (ALT_BN128
 info "Track 2 proving: ${GEN2_MS} ms   blob=${T2_BLOB_BYTES} B (proof region ${T2_PROOF_BYTES} B, 1 proof)"
 info "Submitting BatchRollup2 → L1 preclaim runs ONE pairing check…"
 V0="$(now)"
-T2_RES="$(submit_batch BatchRollup2 "$T2_BLOB" "$T2_PUB" "$T2_BATCH_ID" "$T2_PREV_ROOT" "$T2_NEW_ROOT" "${T2_TX_COUNT:-8}")"
+T2_RES="$(submit_batch BatchRollup2 "$T2_BLOB" "$T2_PUB" "$T2_BATCH_ID" "$T2_PREV_ROOT" "$T2_NEW_ROOT" "${T2_TX_COUNT:-8}" "$ESCROW_ADDR" "$ESCROW_SECRET")"
 V1="$(now)"
 T2_SUBMIT_MS="$(elapsed_ms "$V0" "$V1")"
 [[ "$T2_RES" == "tesSUCCESS" ]] || fail "Track 2 batch → $T2_RES (expected tesSUCCESS)"
 close_ledger
 ok "Track 2 accepted → ${T2_RES}   L1 verify = ${T2_SUBMIT_MS} ms   RollupState2 = $(get_rollup_state "$T2_NEW_ROOT")"
+
+serve_cmd BALANCES > "${WORK_DIR}/bal_after_deposit.txt"
+balance_table "After the 8-deposit batch (batchId 2)" \
+              "${WORK_DIR}/bal_before_deposit.txt" \
+              "${WORK_DIR}/bal_after_deposit.txt"
+info "All 8 claims for this batch are consumed. One claim REMAINS: the one the"
+info "misattribution demo escrowed for leaf 8, which the ledger refused to"
+info "credit to the wrong leaf. It is still owed to its depositor:"
+rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
+| python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for n in d.get('result',{}).get('state',[]):
+    if n.get('LedgerEntryType')=='RollupState' and 'PendingDeposits' in json.dumps(n):
+        print('   PendingDeposits =', n.get('PendingDeposits','(absent)'),
+              ' claims =', len(n.get('DepositClaims',[])),
+              ' pool Balance =', n.get('Balance','(absent)'))
+"
+
+# ─── 3g. withdrawal to a DISTINCT payee ─────────────────────
+hdr "STEP 3g — Withdrawal batch: real XRP leaves escrow for a distinct payee"
+info "Submitter and destination are different accounts, so the legs cannot"
+info "cancel. This is the leg the old demo never exercised."
+ESCROW_L1_BEFORE="$(bal_drops "$ESCROW_ADDR")"
+PAYEE_L1_BEFORE="$(bal_drops "$PAYEE_ADDR")"
+serve_cmd BALANCES > "${WORK_DIR}/bal_before_wd.txt"
+WD="$(serve_cmd PROVE 0 3 4 "$PAYEE_ADDR")"
+eval "$(echo "$WD" | grep -E '^(BLOB|PUB|PREV_ROOT|NEW_ROOT|BATCH_ID|TX_COUNT)=' | sed 's/^/W_/')"
+WD_RES="$(submit_batch BatchRollup2 "$W_BLOB" "$W_PUB" "$W_BATCH_ID" "$W_PREV_ROOT" "$W_NEW_ROOT" "${W_TX_COUNT:-8}" "$ESCROW_ADDR" "$ESCROW_SECRET")"
+[[ "$WD_RES" == "tesSUCCESS" ]] || fail "withdrawal batch → $WD_RES (expected tesSUCCESS)"
+close_ledger
+PAYEE_L1_AFTER="$(bal_drops "$PAYEE_ADDR")"
+ok "Withdrawal accepted → ${WD_RES}"
+ok "PAYEE ${PAYEE_L1_BEFORE} → ${PAYEE_L1_AFTER} drops (+$((PAYEE_L1_AFTER-PAYEE_L1_BEFORE)))"
+serve_cmd BALANCES > "${WORK_DIR}/bal_after_wd.txt"
+balance_table "After the 4-withdrawal batch (batchId 3)" \
+              "${WORK_DIR}/bal_before_wd.txt" \
+              "${WORK_DIR}/bal_after_wd.txt"
+serve_stop
 
 # ─── 4. head-to-head table ──────────────────────────────────
 hdr "STEP 4 — Head-to-head results (both applied on the same ledger)"
@@ -303,7 +621,10 @@ info "different roots — proving Track 1 and Track 2 coexist on the same ledger
 rpc '{"method":"ledger_data","params":[{"ledger_index":"current","limit":400}]}' 2>/dev/null \
 | python3 -c "
 import sys, json
-t1='${T1_NEW_ROOT}'.lower(); t2='${T2_NEW_ROOT}'.lower()
+# Track 2 submits several batches (bootstrap, deposits, withdrawals), so the
+# LIVE root is the last one — the withdrawal batch — not the deposit batch's.
+t1='${T1_NEW_ROOT}'.lower()
+t2set={'${T2_NEW_ROOT}'.lower(), '${W_NEW_ROOT}'.lower(), '${B_NEW_ROOT}'.lower()}
 d=json.load(sys.stdin)
 rows=[n for n in d.get('result',{}).get('state',[]) if n.get('LedgerEntryType')=='RollupState']
 print()
@@ -312,7 +633,7 @@ print('  %-9s %-13s %-14s %s' % ('-'*7,'-'*8,'-'*12,'-'*20))
 for n in rows:
     root=n.get('RollupRoot','').lower()
     if root==t1: tr,tt='Track 1','BatchRollup'
-    elif root==t2: tr,tt='Track 2','BatchRollup2'
+    elif root in t2set: tr,tt='Track 2','BatchRollup2'
     else: tr,tt='?','?'
     print('  %-9s %-13s %-14s %s' % (tr, tt, n.get('index','?')[:12]+'…', n.get('RollupRoot','?')))
 print()
