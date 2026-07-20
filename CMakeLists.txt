@@ -113,7 +113,33 @@ find_package(xxHash REQUIRED)
 #   • EDWARDS    – edwards25519
 #   • MNT4       – MNT4-298
 #   • MNT6       – MNT6-298
-add_definitions(-DCURVE_BN128) 
+add_definitions(-DCURVE_BN128)
+
+# ---------------------------- Parallel proving --------------------------------
+# libsnark's CMakeLists sets -fopenmp/-DMULTICORE in ITS OWN subdirectory scope,
+# which the parent project never sees. That is not enough here: the Groth16
+# prover is a TEMPLATE (r1cs_gg_ppzksnark_prover, see BatchCircuitProver.cpp)
+# instantiated in OUR translation units, so its `#ifdef MULTICORE` OpenMP
+# pragmas are compiled with RIPPLED's flags, not libsnark's. Without this block
+# the pragmas vanish and proving runs single-threaded no matter what
+# -DMULTICORE=ON is passed — measured: 1 thread, 100% of one core.
+if(MULTICORE)
+  find_package(OpenMP)
+  if(OpenMP_CXX_FOUND)
+    add_definitions(-DMULTICORE=1)
+    # -fopenmp must be a COMPILE option on our own targets, not merely an
+    # INTERFACE link dependency. Linking OpenMP::OpenMP_CXX alone pulls in
+    # libgomp but leaves -fopenmp off the compile line, so every `#pragma omp`
+    # in the instantiated prover templates is silently ignored — while
+    # MULTICORE=1 still switches on the multicore code paths. That combination
+    # is worse than serial: it takes the parallel branch with no parallelism.
+    add_compile_options(${OpenMP_CXX_FLAGS})
+    target_link_libraries(ripple_libs INTERFACE OpenMP::OpenMP_CXX)
+    message(STATUS "Parallel proving ENABLED (OpenMP + MULTICORE=1)")
+  else()
+    message(WARNING "MULTICORE=ON but OpenMP not found — proving stays serial")
+  endif()
+endif()
 
 # Header search paths
 include_directories(
