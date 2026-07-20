@@ -84,7 +84,7 @@ RollupSequencer2::admit(SignedRequest const& req) const
         // The recipient must ALREADY exist. An empty slot holds 0, whereas
         // the circuit's to_old_leaf is a Poseidon image, so a transfer into a
         // fresh leaf can never satisfy the inclusion check — catch it here
-        // rather than after ~38 s of proving.
+        // rather than after ~62 s of proving.
         if (!a || req.nonce != a->nonce || req.value > a->balance)
             return false;
         auto const* to = find(req.dest);
@@ -174,7 +174,7 @@ RollupSequencer2::buildBatch(
 
             // Withdrawals: the signed `dest` must encode the L1 payout target
             // carried alongside it. BatchRollup2::preflight rejects any batch
-            // where these disagree, so catch it here rather than spending ~38 s
+            // where these disagree, so catch it here rather than spending ~62 s
             // proving a batch L1 will refuse.
             if (req.type == RequestType::Withdraw &&
                 (sr.destination == AccountID{} ||

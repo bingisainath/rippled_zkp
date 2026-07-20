@@ -158,9 +158,17 @@ main(int argc, char** argv)
     if (argc >= 2 && std::string(argv[1]) == "--serve")
     {
         // Resident prover daemon (what a production sequencer does): pay the
-        // startup cost ONCE — curve init + deserialising the ~78 MB proving
-        // key — then answer PROVE commands over stdin. Per-batch cost drops
-        // to the pure prove step (~38-40 s at depth 16 on this VM).
+        // startup cost ONCE — curve init + deserialising the ~117 MB proving
+        // key, measured at 80 s on this VM — then answer PROVE commands over
+        // stdin. Per-batch cost drops to the pure prove step.
+        //
+        // MEASURED (phase 7, 372,404 constraints, depth 16, N=8):
+        //   61.5 s mean over 5 batches, spread 0.41 s (0.7%).
+        // That spread is the point: a batch of 8 NoOps costs the same as one
+        // carrying a real transfer, because the circuit is FIXED-SIZE — every
+        // slot runs the full EdDSA check and both Merkle paths regardless of
+        // content. Prove time tracks batch CAPACITY, never batch content, so
+        // a half-empty batch costs exactly what a full one does.
         //
         // Because the RollupSequencer2 instance persists across commands, its
         // account tree chains naturally: PROVE n, PROVE n+1, … produce batches
@@ -533,7 +541,7 @@ main(int argc, char** argv)
 
     std::cerr << "[gen_batch_blob2] building batch " << batchId << " with "
               << deposits << " deposit(s) + " << (BATCH2_SIZE - deposits)
-              << " NoOp pad(s); proving (~38s at depth " << kDepth << ")…\n";
+              << " NoOp pad(s); proving (~62s at depth " << kDepth << ")…\n";
 
     auto bp = seq.buildBatch(reqs, batchId);
     if (!bp)
