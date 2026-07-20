@@ -74,16 +74,23 @@ RollupSequencer2::admit(SignedRequest const& req) const
     if (!req.verifySignature())
         return false;
 
-    // Transfer is reserved: the BatchCircuit's `t1 == w` constraint makes a
-    // Transfer entry structurally unprovable, so admitting one would only
-    // surface as an isSatisfied() failure after the batch was assembled.
-    if (req.type == RequestType::Transfer)
-        return false;
-
     if (req.type == RequestType::NoOp)
         return true;
 
     auto const* a = find(req.from_apk.x);
+
+    if (req.type == RequestType::Transfer)
+    {
+        // The recipient must ALREADY exist. An empty slot holds 0, whereas
+        // the circuit's to_old_leaf is a Poseidon image, so a transfer into a
+        // fresh leaf can never satisfy the inclusion check — catch it here
+        // rather than after ~38 s of proving.
+        if (!a || req.nonce != a->nonce || req.value > a->balance)
+            return false;
+        auto const* to = find(req.dest);
+        return to != nullptr;
+    }
+
     if (req.type == RequestType::Deposit)
     {
         // Deposit creates the account on first use (nonce 0) or tops up an
@@ -92,7 +99,7 @@ RollupSequencer2::admit(SignedRequest const& req) const
         return req.nonce == expectedNonce;
     }
 
-    // Withdraw / Transfer require an existing, sufficiently funded account.
+    // Withdraw requires an existing, sufficiently funded account.
     if (!a)
         return false;
     if (req.nonce != a->nonce)
@@ -231,13 +238,34 @@ RollupSequencer2::buildBatch(
             ew.is_create = isCreate;
             ew.leaf_pos = tree.posBits(index);
             ew.auth_path = tree.authPath(index);
-            witnesses.push_back(ew);
+            // NOTE: pushed at the END of this block — the Transfer branch
+            // below still has recipient fields to fill in.
+
+            // Transfer: capture the recipient BEFORE the sender's update, but
+            // take the auth path AFTER it — the circuit walks the recipient
+            // leg from `mid`, the root the sender's update produced.
+            Account* toAcct = nullptr;
+            if (req.type == RequestType::Transfer)
+            {
+                uint256 const toKey = PoseidonHash::fieldToUint256(req.dest);
+                auto toIt = accounts.find(toKey);
+                if (toIt == accounts.end())
+                    return std::nullopt;  // admit() already rejected this
+                toAcct = &toIt->second;
+                if (toAcct->index == index)
+                    return std::nullopt;  // self-transfer: not supported
+                ew.to_apk_x = req.dest;
+                ew.to_old_balance = toAcct->balance;
+                ew.to_nonce = toAcct->nonce;
+            }
 
             // Apply the transition to the local tree + account map.
             std::uint64_t newBal = oldBal;
             if (req.type == RequestType::Deposit)
                 newBal = oldBal + req.value;
-            else if (req.type == RequestType::Withdraw)
+            else if (
+                req.type == RequestType::Withdraw ||
+                req.type == RequestType::Transfer)
                 newBal = oldBal - req.value;
 
             AccountLeaf nl;
@@ -247,6 +275,30 @@ RollupSequencer2::buildBatch(
             tree.setLeaf(index, nl.hash());
 
             accounts[key] = Account{index, req.from_apk, newBal, req.nonce + 1};
+
+            if (toAcct)
+            {
+                // Re-read: the map entry above may have been rehashed by the
+                // assignment, and for a transfer the recipient is a DIFFERENT
+                // key, so the pointer stays valid — but take the index by
+                // value to keep that independent of container internals.
+                std::size_t const toIndex = toAcct->index;
+                std::uint64_t const toNewBal =
+                    toAcct->balance + req.value;
+
+                ew.to_leaf_pos = tree.posBits(toIndex);
+                ew.to_auth_path = tree.authPath(toIndex);
+
+                AccountLeaf tl;
+                tl.apk = toAcct->apk;
+                tl.balance = toNewBal;
+                tl.nonce = toAcct->nonce;  // recipient nonce NOT consumed
+                tree.setLeaf(toIndex, tl.hash());
+
+                toAcct->balance = toNewBal;
+            }
+
+            witnesses.push_back(ew);
 
             e.fromApkX = PoseidonHash::fieldToUint256(apkX);
             e.dest = PoseidonHash::fieldToUint256(req.dest);

@@ -306,9 +306,14 @@ public:
     void
     testTransferRejectedAtAdmission()
     {
-        testcase("Phase 6 — Transfer rejected at admission (reserved)");
+        testcase("Phase 7 — Transfer to an unknown recipient is rejected");
         setupOnce();
 
+        // Transfer is no longer reserved. What IS still rejected is a
+        // transfer into a leaf that does not exist: an empty slot holds 0,
+        // while the circuit's to_old_leaf is a Poseidon image, so such a
+        // batch could never be proven. Catching it at admission avoids
+        // burning ~38 s on an unprovable witness.
         RollupSequencer2 seq(kDepth);
         auto const req = SignedRequest::make(
             userKey(3),
@@ -320,9 +325,55 @@ public:
     }
 
     void
+    testTransferBetweenFundedAccounts()
+    {
+        testcase("Phase 7 — transfer between two funded leaves is provable");
+        setupOnce();
+
+        RollupSequencer2 seq(kDepth);
+        auto const keyA = userKey(1);
+        auto const keyB = userKey(2);
+        auto const apkA = EdDSA::derivePublicKey(keyA);
+        auto const apkB = EdDSA::derivePublicKey(keyB);
+
+        // Fund both leaves first — only deposits create accounts.
+        std::vector<SequencerRequest> b1;
+        b1.push_back(
+            {SignedRequest::make(keyA, apkA.x, 1000, 0, RequestType::Deposit),
+             AccountID{}});
+        b1.push_back(
+            {SignedRequest::make(keyB, apkB.x, 400, 0, RequestType::Deposit),
+             AccountID{}});
+        BEAST_EXPECT(seq.buildBatch(b1, 1).has_value());
+
+        // A sends 250 to B. A's nonce is now 1; B's must NOT move.
+        auto const xfer =
+            SignedRequest::make(keyA, apkB.x, 250, 1, RequestType::Transfer);
+        BEAST_EXPECT(seq.admit(xfer));
+
+        std::vector<SequencerRequest> b2;
+        b2.push_back({xfer, AccountID{}});
+        auto const bp = seq.buildBatch(b2, 2);
+        BEAST_EXPECT(bp.has_value());
+
+        auto const a = seq.account(apkA.x);
+        auto const b = seq.account(apkB.x);
+        BEAST_EXPECT(a.has_value() && b.has_value());
+        if (a && b)
+        {
+            BEAST_EXPECT(a->balance == 750);
+            BEAST_EXPECT(a->nonce == 2);
+            BEAST_EXPECT(b->balance == 650);
+            // The recipient did not sign, so their nonce is untouched.
+            BEAST_EXPECT(b->nonce == 1);
+        }
+    }
+
+    void
     run() override
     {
         testGenesisRootConsistency();
+        testTransferBetweenFundedAccounts();
         testBuildBatchAndVerify();
         testTamperedNewRootRejected();
         testReplayedNonceRejectedByAdmission();

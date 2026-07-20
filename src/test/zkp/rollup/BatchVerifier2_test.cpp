@@ -130,6 +130,28 @@ class BatchVerifier2_test : public beast::unit_test::suite
             return build({sr}, batchId);
         }
 
+        // Phase 7. A pure-L2 batch: no claim consumed, no escrow touched,
+        // no L1 balance moved. `destination` stays zero — the signed `dest`
+        // carries the RECIPIENT'S apk_x, which the circuit binds the credited
+        // leaf to via is_xfer*(to_x - dest) = 0.
+        BuiltBatch
+        transfer(
+            std::uint32_t batchId,
+            std::size_t from,
+            std::size_t to,
+            std::uint64_t value,
+            std::uint64_t nonce)
+        {
+            SequencerRequest sr;
+            sr.req = SignedRequest::make(
+                userKey(from),
+                EdDSA::derivePublicKey(userKey(to)).x,
+                value,
+                nonce,
+                RequestType::Transfer);
+            return build({sr}, batchId);
+        }
+
         BuiltBatch
         deposits(std::uint32_t batchId, std::size_t nDeposits)
         {
@@ -664,6 +686,55 @@ public:
     }
 
     void
+    testTransferAppliesOnL1()
+    {
+        testcase("Phase 7 — transfer batch applies and moves NO real XRP");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account depositor("depositor2_xfer");
+        env.fund(jtx::XRP(100000), depositor);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // Fund L2 users 0 and 1 — only deposits create leaves, and a
+        // transfer cannot credit a leaf that does not exist.
+        escrowFor(env, depositor, submitter, 2);
+        env(batchRollup2Tx(submitter, c.deposits(2, 2)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        auto const sleBefore = env.current()->read(keylet::rollup_state2());
+        auto const rootBefore = sleBefore->getFieldH256(sfRollupRoot);
+        auto const poolBefore = poolDrops(sleBefore);
+        auto const claimsBefore =
+            RollupState2::depositClaims(*sleBefore).size();
+        auto const escrowBefore = env.balance(submitter).value().xrp();
+        auto const depositorBefore = env.balance(depositor).value().xrp();
+
+        // User 0 holds 1000 and has nonce 1 after the deposit batch.
+        auto bb = c.transfer(3, /*from=*/0, /*to=*/1, /*value=*/250,
+                             /*nonce=*/1);
+        env(batchRollup2Tx(submitter, bb), jtx::ter(tesSUCCESS));
+        env.close();
+
+        auto const sle = env.current()->read(keylet::rollup_state2());
+
+        // THE POINT OF THIS TEST: the root advanced — real L2 state changed —
+        // while every L1 quantity stayed put. A transfer conserves the total,
+        // so the pool cannot move; it consumes no claim; and it pays out of
+        // no escrow, so the only escrow delta permitted is the batch fee.
+        BEAST_EXPECT(sle->getFieldH256(sfRollupRoot) == bb.bp.newRoot);
+        BEAST_EXPECT(sle->getFieldH256(sfRollupRoot) != rootBefore);
+        BEAST_EXPECT(poolDrops(sle) == poolBefore);
+        BEAST_EXPECT(RollupState2::depositClaims(*sle).size() == claimsBefore);
+        BEAST_EXPECT(env.balance(depositor).value().xrp() == depositorBefore);
+        BEAST_EXPECT(env.balance(submitter).value().xrp() <= escrowBefore);
+        BEAST_EXPECT(sle->getFieldU32(sfBatchCounter) == 3);
+    }
+
+    void
     testWithdrawalBeyondEscrowRejected()
     {
         testcase("Phase 6 — withdrawal rejected when escrow cannot fund it");
@@ -749,6 +820,7 @@ public:
         testMoreDepositsThanClaimsRejected();
         testDepositQueueCap();
         testWithdrawalMovesRealXRP();
+        testTransferAppliesOnL1();
         testWithdrawalBeyondEscrowRejected();
         testWrongPrevRootRejected();
     }

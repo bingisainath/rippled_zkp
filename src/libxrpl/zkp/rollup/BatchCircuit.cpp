@@ -148,6 +148,14 @@ public:
         libsnark::pb_variable<FieldT> value, nonce, old_bal, new_bal;
         libsnark::pb_variable<FieldT> t0, t1, w;  // type bits, w = t0*t1
         libsnark::pb_variable<FieldT> is_create, dv;  // dv = t0*value
+        libsnark::pb_variable<FieldT> is_xfer, xv;  // is_xfer = t1-w; xv = *value
+
+        // Recipient leg (Transfer). mid = root after the sender's update.
+        libsnark::pb_variable<FieldT> mid;
+        libsnark::pb_variable<FieldT> to_x, to_old_bal, to_nonce, to_new_bal;
+        libsnark::pb_variable<FieldT> to_old_packed, to_new_packed;
+        libsnark::pb_variable<FieldT> to_old_pose, to_new_pose;
+        libsnark::pb_variable<FieldT> to_base_o, to_base_n;
 
         // Hash wires.
         libsnark::pb_variable<FieldT> meta, m1, msg;
@@ -163,19 +171,29 @@ public:
         // Range-check bit arrays.
         libsnark::pb_variable_array<FieldT> value_bits, nonce_bits,
             old_bal_bits, new_bal_bits;
+        libsnark::pb_variable_array<FieldT> to_old_bal_bits, to_nonce_bits,
+            to_new_bal_bits;
 
-        // Merkle path.
+        // Merkle path (sender).
         libsnark::pb_variable_array<FieldT> pos_bits;
         std::vector<libsnark::pb_variable<FieldT>> auth;
         std::vector<libsnark::pb_variable<FieldT>> po, pn;  // depth+1 each
         std::vector<libsnark::pb_variable<FieldT>> lo, ro, ln, rn;
 
+        // Merkle path (recipient): mid -> roots_[i+1].
+        libsnark::pb_variable_array<FieldT> to_pos_bits;
+        std::vector<libsnark::pb_variable<FieldT>> to_auth;
+        std::vector<libsnark::pb_variable<FieldT>> qo, qn;  // depth+1 each
+        std::vector<libsnark::pb_variable<FieldT>> qlo, qro, qln, qrn;
+
         // Gadgets.
         std::unique_ptr<PoseidonGadget> g_m1, g_msg, g_old, g_new, g_eh;
+        std::unique_ptr<PoseidonGadget> g_to_old, g_to_new;
         std::unique_ptr<EdDSAGadget> g_sig;
         std::unique_ptr<libsnark::packing_gadget<FieldT>> g_value_range,
-            g_nonce_range, g_old_bal_range, g_new_bal_range;
-        std::vector<std::unique_ptr<PoseidonGadget>> g_po, g_pn;
+            g_nonce_range, g_old_bal_range, g_new_bal_range,
+            g_to_old_bal_range, g_to_nonce_range, g_to_new_bal_range;
+        std::vector<std::unique_ptr<PoseidonGadget>> g_po, g_pn, g_qo, g_qn;
     };
     std::vector<EntryWires> entries_;
 
@@ -200,6 +218,20 @@ private:
         e.w.allocate(*pb_, n("w"));
         e.is_create.allocate(*pb_, n("is_create"));
         e.dv.allocate(*pb_, n("dv"));
+        e.is_xfer.allocate(*pb_, n("is_xfer"));
+        e.xv.allocate(*pb_, n("xv"));
+
+        e.mid.allocate(*pb_, n("mid"));
+        e.to_x.allocate(*pb_, n("to_x"));
+        e.to_old_bal.allocate(*pb_, n("to_old_bal"));
+        e.to_nonce.allocate(*pb_, n("to_nonce"));
+        e.to_new_bal.allocate(*pb_, n("to_new_bal"));
+        e.to_old_packed.allocate(*pb_, n("to_old_packed"));
+        e.to_new_packed.allocate(*pb_, n("to_new_packed"));
+        e.to_old_pose.allocate(*pb_, n("to_old_pose"));
+        e.to_new_pose.allocate(*pb_, n("to_new_pose"));
+        e.to_base_o.allocate(*pb_, n("to_base_o"));
+        e.to_base_n.allocate(*pb_, n("to_base_n"));
 
         e.meta.allocate(*pb_, n("meta"));
         e.m1.allocate(*pb_, n("m1"));
@@ -223,6 +255,9 @@ private:
         e.nonce_bits.allocate(*pb_, kRangeBits, n("nonce_bits"));
         e.old_bal_bits.allocate(*pb_, kRangeBits, n("old_bal_bits"));
         e.new_bal_bits.allocate(*pb_, kRangeBits, n("new_bal_bits"));
+        e.to_old_bal_bits.allocate(*pb_, kRangeBits, n("to_old_bal_bits"));
+        e.to_nonce_bits.allocate(*pb_, kRangeBits, n("to_nonce_bits"));
+        e.to_new_bal_bits.allocate(*pb_, kRangeBits, n("to_new_bal_bits"));
 
         e.pos_bits.allocate(*pb_, tree_depth_, n("pos_bits"));
         e.auth.resize(tree_depth_);
@@ -246,6 +281,28 @@ private:
             e.pn[l].allocate(*pb_, FMT("", "e%zu_pn_%zu", i, l));
         }
 
+        e.to_pos_bits.allocate(*pb_, tree_depth_, n("to_pos_bits"));
+        e.to_auth.resize(tree_depth_);
+        e.qo.resize(tree_depth_ + 1);
+        e.qn.resize(tree_depth_ + 1);
+        e.qlo.resize(tree_depth_);
+        e.qro.resize(tree_depth_);
+        e.qln.resize(tree_depth_);
+        e.qrn.resize(tree_depth_);
+        for (std::size_t l = 0; l < tree_depth_; ++l)
+        {
+            e.to_auth[l].allocate(*pb_, FMT("", "e%zu_to_auth_%zu", i, l));
+            e.qlo[l].allocate(*pb_, FMT("", "e%zu_qlo_%zu", i, l));
+            e.qro[l].allocate(*pb_, FMT("", "e%zu_qro_%zu", i, l));
+            e.qln[l].allocate(*pb_, FMT("", "e%zu_qln_%zu", i, l));
+            e.qrn[l].allocate(*pb_, FMT("", "e%zu_qrn_%zu", i, l));
+        }
+        for (std::size_t l = 0; l <= tree_depth_; ++l)
+        {
+            e.qo[l].allocate(*pb_, FMT("", "e%zu_qo_%zu", i, l));
+            e.qn[l].allocate(*pb_, FMT("", "e%zu_qn_%zu", i, l));
+        }
+
         // Sub-gadgets (allocate their internals now, constrain later).
         e.g_m1 = std::make_unique<PoseidonGadget>(
             *pb_, e.from_x, e.dest, e.m1, n("g_m1"));
@@ -255,6 +312,10 @@ private:
             *pb_, e.from_x, e.old_packed, e.old_pose, n("g_old"));
         e.g_new = std::make_unique<PoseidonGadget>(
             *pb_, e.from_x, e.new_packed, e.new_pose, n("g_new"));
+        e.g_to_old = std::make_unique<PoseidonGadget>(
+            *pb_, e.to_x, e.to_old_packed, e.to_old_pose, n("g_to_old"));
+        e.g_to_new = std::make_unique<PoseidonGadget>(
+            *pb_, e.to_x, e.to_new_packed, e.to_new_pose, n("g_to_new"));
         e.g_eh = std::make_unique<PoseidonGadget>(
             *pb_, eh_[i], e.msg, eh_[i + 1], n("g_eh"));
         e.g_sig = std::make_unique<EdDSAGadget>(
@@ -270,6 +331,17 @@ private:
         e.g_new_bal_range =
             std::make_unique<libsnark::packing_gadget<FieldT>>(
                 *pb_, e.new_bal_bits, e.new_bal, n("g_new_bal_range"));
+        e.g_to_old_bal_range =
+            std::make_unique<libsnark::packing_gadget<FieldT>>(
+                *pb_, e.to_old_bal_bits, e.to_old_bal,
+                n("g_to_old_bal_range"));
+        e.g_to_nonce_range =
+            std::make_unique<libsnark::packing_gadget<FieldT>>(
+                *pb_, e.to_nonce_bits, e.to_nonce, n("g_to_nonce_range"));
+        e.g_to_new_bal_range =
+            std::make_unique<libsnark::packing_gadget<FieldT>>(
+                *pb_, e.to_new_bal_bits, e.to_new_bal,
+                n("g_to_new_bal_range"));
 
         for (std::size_t l = 0; l < tree_depth_; ++l)
         {
@@ -279,6 +351,12 @@ private:
             e.g_pn.emplace_back(std::make_unique<PoseidonGadget>(
                 *pb_, e.ln[l], e.rn[l], e.pn[l + 1],
                 FMT("", "e%zu_g_pn_%zu", i, l)));
+            e.g_qo.emplace_back(std::make_unique<PoseidonGadget>(
+                *pb_, e.qlo[l], e.qro[l], e.qo[l + 1],
+                FMT("", "e%zu_g_qo_%zu", i, l)));
+            e.g_qn.emplace_back(std::make_unique<PoseidonGadget>(
+                *pb_, e.qln[l], e.qrn[l], e.qn[l + 1],
+                FMT("", "e%zu_g_qn_%zu", i, l)));
         }
     }
 
@@ -297,10 +375,11 @@ private:
             *pb_, e.t1, n("t1_bool"));
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.t0, e.t1, e.w), n("w_def"));
-        // Transfer (t1=1, t0=0) is reserved: t1*(1-t0) = 0  <=>  t1 = w.
+        // Transfer (t1=1, t0=0) selector: is_xfer = t1*(1-t0) = t1 - w.
+        // Boolean for free: t0,t1 are boolean and w = t0*t1.
         pb_->add_r1cs_constraint(
-            libsnark::r1cs_constraint<FieldT>(e.t1 - e.w, 1, 0),
-            n("no_transfer"));
+            libsnark::r1cs_constraint<FieldT>(e.is_xfer - e.t1 + e.w, 1, 0),
+            n("is_xfer_def"));
 
         // ----- 2. is_create semantics; NoOp forces value = 0 -----
         libsnark::generate_boolean_r1cs_constraint<FieldT>(
@@ -366,18 +445,50 @@ private:
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.t0, e.value, e.dv),
             n("dv_def"));
-        // Deposit(+value) / Withdraw(-value) / NoOp(0, since value=0):
-        //   new_bal = old_bal + value - 2*dv
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(e.is_xfer, e.value, e.xv),
+            n("xv_def"));
+        // Deposit(+value) / Withdraw(-value) / Transfer(-value, via xv) /
+        // NoOp(0, since value=0):
+        //   new_bal = old_bal + value - 2*dv - 2*xv
+        // A Transfer has t0=0 so dv=0; xv=value makes it debit the sender
+        // exactly as a Withdraw does.
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
-                e.new_bal - e.old_bal - e.value + FieldT(2) * e.dv, 1, 0),
+                e.new_bal - e.old_bal - e.value + FieldT(2) * e.dv +
+                    FieldT(2) * e.xv,
+                1,
+                0),
             n("new_bal_def"));
+
+        // Recipient balance: credited by exactly the same value, and ONLY
+        // for a Transfer. is_xfer=0 forces to_new_bal == to_old_bal, which
+        // is what collapses the recipient leg to a no-op below.
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.to_new_bal - e.to_old_bal - e.xv, 1, 0),
+            n("to_new_bal_def"));
+
+        // Bind the credited leaf to the SIGNED dest. Without this a sequencer
+        // could debit Alice and credit itself: dest is covered by the user's
+        // EdDSA signature (via m1), to_x is not.
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.is_xfer, e.to_x - e.dest, 0),
+            n("to_x_is_dest"));
 
         // ----- 9. Range checks (canonical 64-bit packings) -----
         e.g_value_range->generate_r1cs_constraints(true);
         e.g_nonce_range->generate_r1cs_constraints(true);
         e.g_old_bal_range->generate_r1cs_constraints(true);
         e.g_new_bal_range->generate_r1cs_constraints(true);
+        // Same aliasing argument as the sender side (BatchCircuit.h §5):
+        // without canonical 64-bit packings a prover could offset
+        // to_old_bal by 2^64·k and to_nonce by −k, leaving to_old_packed
+        // unchanged while smuggling drops into to_new_bal.
+        e.g_to_old_bal_range->generate_r1cs_constraints(true);
+        e.g_to_nonce_range->generate_r1cs_constraints(true);
+        e.g_to_new_bal_range->generate_r1cs_constraints(true);
 
         // ----- 10. New leaf; NoOp mux (keep the slot unchanged) -----
         //   new_packed = new_bal + 2^64 * (nonce + 1 - w)
@@ -431,14 +542,103 @@ private:
             e.g_pn[l]->generate_r1cs_constraints();
         }
 
-        // ----- 12. Root chaining -----
+        // ----- 12. Recipient leaf hashes and the no-op mux -----
+        //   to_old_packed = to_old_bal + 2^64 * to_nonce
+        //   to_new_packed = to_new_bal + 2^64 * to_nonce   (SAME nonce:
+        //   the recipient did not sign, so their nonce is not consumed)
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.to_old_packed - e.to_old_bal - twoPow64() * e.to_nonce,
+                1,
+                0),
+            n("to_old_packed_def"));
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.to_new_packed - e.to_new_bal - twoPow64() * e.to_nonce,
+                1,
+                0),
+            n("to_new_packed_def"));
+        e.g_to_old->generate_r1cs_constraints();
+        e.g_to_new->generate_r1cs_constraints();
+
+        // is_xfer=1 -> to_base = the recipient's real leaf
+        // is_xfer=0 -> to_base = new_base, i.e. the sender's own post-update
+        //              leaf. Both legs then hash the SAME value up the SAME
+        //              path, so qo[depth] == qn[depth] and mid == r_{i+1}.
+        //              This also keeps the leg satisfiable for a NoOp against
+        //              an empty pad slot, where new_base = 0 is not a
+        //              Poseidon image and no real leaf could stand in.
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.is_xfer,
+                e.to_old_pose - e.new_base,
+                e.to_base_o - e.new_base),
+            n("to_base_o_mux"));
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.is_xfer,
+                e.to_new_pose - e.new_base,
+                e.to_base_n - e.new_base),
+            n("to_base_n_mux"));
+
+        // ----- 13. Recipient Merkle path: mid -> roots_[i+1] -----
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(e.qo[0] - e.to_base_o, 1, 0),
+            n("qo_base"));
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(e.qn[0] - e.to_base_n, 1, 0),
+            n("qn_base"));
+
+        for (std::size_t l = 0; l < tree_depth_; ++l)
+        {
+            libsnark::generate_boolean_r1cs_constraint<FieldT>(
+                *pb_, e.to_pos_bits[l], FMT("", "e%zu_qpos_bool_%zu", i, l));
+
+            pb_->add_r1cs_constraint(
+                libsnark::r1cs_constraint<FieldT>(
+                    e.to_pos_bits[l],
+                    e.to_auth[l] - e.qo[l],
+                    e.qlo[l] - e.qo[l]),
+                FMT("", "e%zu_mux_qlo_%zu", i, l));
+            pb_->add_r1cs_constraint(
+                libsnark::r1cs_constraint<FieldT>(
+                    e.to_pos_bits[l],
+                    e.qo[l] - e.to_auth[l],
+                    e.qro[l] - e.to_auth[l]),
+                FMT("", "e%zu_mux_qro_%zu", i, l));
+            e.g_qo[l]->generate_r1cs_constraints();
+
+            pb_->add_r1cs_constraint(
+                libsnark::r1cs_constraint<FieldT>(
+                    e.to_pos_bits[l],
+                    e.to_auth[l] - e.qn[l],
+                    e.qln[l] - e.qn[l]),
+                FMT("", "e%zu_mux_qln_%zu", i, l));
+            pb_->add_r1cs_constraint(
+                libsnark::r1cs_constraint<FieldT>(
+                    e.to_pos_bits[l],
+                    e.qn[l] - e.to_auth[l],
+                    e.qrn[l] - e.to_auth[l]),
+                FMT("", "e%zu_mux_qrn_%zu", i, l));
+            e.g_qn[l]->generate_r1cs_constraints();
+        }
+
+        // ----- 14. Root chaining: r_i -> mid -> r_{i+1} -----
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
                 e.po[tree_depth_] - roots_[i], 1, 0),
             n("old_root_link"));
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
-                e.pn[tree_depth_] - roots_[i + 1], 1, 0),
+                e.pn[tree_depth_] - e.mid, 1, 0),
+            n("mid_root_link"));
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.qo[tree_depth_] - e.mid, 1, 0),
+            n("to_old_root_link"));
+        pb_->add_r1cs_constraint(
+            libsnark::r1cs_constraint<FieldT>(
+                e.qn[tree_depth_] - roots_[i + 1], 1, 0),
             n("new_root_link"));
     }
 
@@ -452,6 +652,13 @@ private:
             ew.auth_path.size() != tree_depth_)
             throw std::invalid_argument(
                 "BatchCircuit: leaf_pos/auth_path size != tree_depth");
+
+        if (req.type == RequestType::Transfer &&
+            (ew.to_leaf_pos.size() != tree_depth_ ||
+             ew.to_auth_path.size() != tree_depth_))
+            throw std::invalid_argument(
+                "BatchCircuit: Transfer to_leaf_pos/to_auth_path size != "
+                "tree_depth");
 
         bool const isNoop = (req.type == RequestType::NoOp);
         bool const isWithdraw = (req.type == RequestType::Withdraw);
@@ -471,10 +678,12 @@ private:
         pb_->val(e.is_create) =
             ew.is_create ? FieldT::one() : FieldT::zero();
         pb_->val(e.dv) = pb_->val(e.t0) * pb_->val(e.value);
+        pb_->val(e.is_xfer) = pb_->val(e.t1) - pb_->val(e.w);
+        pb_->val(e.xv) = pb_->val(e.is_xfer) * pb_->val(e.value);
         // Field-arithmetic form; an overdraft wraps into a huge field
         // element and the 64-bit range check becomes unsatisfiable.
         pb_->val(e.new_bal) = pb_->val(e.old_bal) + pb_->val(e.value) -
-            FieldT(2) * pb_->val(e.dv);
+            FieldT(2) * pb_->val(e.dv) - FieldT(2) * pb_->val(e.xv);
 
         // meta / message hashes.
         pb_->val(e.meta) = pb_->val(e.value) +
@@ -508,11 +717,36 @@ private:
         pb_->val(e.new_base) =
             isNoop ? pb_->val(e.old_used) : pb_->val(e.new_pose);
 
+        // Recipient leg. For a non-Transfer the mux discards to_old_pose /
+        // to_new_pose entirely, so zeros are a valid (and canonical) filler —
+        // they still have to satisfy the 64-bit range checks, which 0 does.
+        bool const isXfer = (req.type == RequestType::Transfer);
+        pb_->val(e.to_x) = isXfer ? ew.to_apk_x : FieldT::zero();
+        pb_->val(e.to_old_bal) =
+            isXfer ? FieldT(ew.to_old_balance) : FieldT::zero();
+        pb_->val(e.to_nonce) = isXfer ? FieldT(ew.to_nonce) : FieldT::zero();
+        pb_->val(e.to_new_bal) = pb_->val(e.to_old_bal) + pb_->val(e.xv);
+
+        pb_->val(e.to_old_packed) =
+            pb_->val(e.to_old_bal) + twoPow64() * pb_->val(e.to_nonce);
+        pb_->val(e.to_new_packed) =
+            pb_->val(e.to_new_bal) + twoPow64() * pb_->val(e.to_nonce);
+        e.g_to_old->generate_r1cs_witness();
+        e.g_to_new->generate_r1cs_witness();
+
+        pb_->val(e.to_base_o) =
+            isXfer ? pb_->val(e.to_old_pose) : pb_->val(e.new_base);
+        pb_->val(e.to_base_n) =
+            isXfer ? pb_->val(e.to_new_pose) : pb_->val(e.new_base);
+
         // Range decompositions (from the packed values already set).
         e.g_value_range->generate_r1cs_witness_from_packed();
         e.g_nonce_range->generate_r1cs_witness_from_packed();
         e.g_old_bal_range->generate_r1cs_witness_from_packed();
         e.g_new_bal_range->generate_r1cs_witness_from_packed();
+        e.g_to_old_bal_range->generate_r1cs_witness_from_packed();
+        e.g_to_nonce_range->generate_r1cs_witness_from_packed();
+        e.g_to_new_bal_range->generate_r1cs_witness_from_packed();
 
         // Merkle paths.
         pb_->val(e.po[0]) = pb_->val(e.old_used);
@@ -536,8 +770,37 @@ private:
             e.g_pn[l]->generate_r1cs_witness();  // sets pn[l+1]
         }
 
+        // Intermediate root: the tree after the sender's leaf changed.
+        pb_->val(e.mid) = pb_->val(e.pn[tree_depth_]);
+
+        // Recipient path. For a non-Transfer we walk the SENDER's position and
+        // siblings again: only that one leaf moved, so its siblings are
+        // unchanged, and starting from new_base the walk reproduces mid
+        // exactly — which is what forces r_{i+1} == mid.
+        pb_->val(e.qo[0]) = pb_->val(e.to_base_o);
+        pb_->val(e.qn[0]) = pb_->val(e.to_base_n);
+        for (std::size_t l = 0; l < tree_depth_; ++l)
+        {
+            bool const bit = isXfer ? ew.to_leaf_pos[l] : ew.leaf_pos[l];
+            FieldT const sib = isXfer ? ew.to_auth_path[l] : ew.auth_path[l];
+
+            pb_->val(e.to_pos_bits[l]) =
+                bit ? FieldT::one() : FieldT::zero();
+            pb_->val(e.to_auth[l]) = sib;
+
+            FieldT const cur_o = pb_->val(e.qo[l]);
+            FieldT const cur_n = pb_->val(e.qn[l]);
+            pb_->val(e.qlo[l]) = bit ? sib : cur_o;
+            pb_->val(e.qro[l]) = bit ? cur_o : sib;
+            pb_->val(e.qln[l]) = bit ? sib : cur_n;
+            pb_->val(e.qrn[l]) = bit ? cur_n : sib;
+
+            e.g_qo[l]->generate_r1cs_witness();  // sets qo[l+1]
+            e.g_qn[l]->generate_r1cs_witness();  // sets qn[l+1]
+        }
+
         // Advance the root chain.
-        pb_->val(roots_[i + 1]) = pb_->val(e.pn[tree_depth_]);
+        pb_->val(roots_[i + 1]) = pb_->val(e.qn[tree_depth_]);
 
         (void)isWithdraw;  // semantics fully captured by t0/dv above
     }

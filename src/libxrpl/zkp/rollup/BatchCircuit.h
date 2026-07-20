@@ -17,8 +17,9 @@
 //                  binding the published entry data to the proven statement.
 //
 // Per entry i (witness: SignedRequest fields, sig, old balance, auth path):
-//   1. type ∈ {Deposit, Withdraw, NoOp}   (Transfer reserved, rejected)
-//      bits (t1,t0): Deposit=00, Withdraw=01, NoOp=11; t1*(1-t0)=0 bans 10.
+//   1. type ∈ {Deposit, Withdraw, Transfer, NoOp}
+//      bits (t1,t0): Deposit=00, Withdraw=01, Transfer=10, NoOp=11.
+//      is_xfer = t1*(1-t0) = t1 - w selects the Transfer case.
 //   2. meta = value + 2^64·nonce + 2^128·type          (linear)
 //      msg  = Poseidon(Poseidon(from_x, dest), meta)   (= AccountLeaf.h spec)
 //   3. from_apk on-curve  AND  EdDSAGadget(from_apk, R, s, msg) verifies.
@@ -26,7 +27,7 @@
 //   4. old_leaf = Poseidon(from_x, old_bal + 2^64·nonce), or 0 if is_create
 //      (is_create forces old_bal = 0 and nonce = 0).
 //      old_leaf is a member of r_i at leaf_pos (16-level Poseidon path).
-//   5. new_bal = old_bal + value (Deposit) | old_bal − value (Withdraw)
+//   5. new_bal = old_bal + value (Deposit) | old_bal − value (Withdraw/Transfer)
 //      64-bit range checks on value, nonce, old_bal, new_bal make the
 //      packings canonical and catch overdraft/overflow. (Range-checking
 //      old_bal/nonce is NOT redundant: without it a prover could supply
@@ -34,9 +35,28 @@
 //      and smuggle 2^64·k extra drops through the balance arithmetic.)
 //   6. new_leaf = Poseidon(from_x, new_bal + 2^64·(nonce+1)); a NoOp
 //      instead re-uses old_leaf unchanged (nonce not consumed).
-//   7. The SAME path siblings hash new_leaf up to r_{i+1} — sound because
-//      entry i changes exactly one leaf between r_i and r_{i+1}.
-//   8. eh_{i+1} = Poseidon(eh_i, msg_i).
+//   7. The SAME path siblings hash new_leaf up to an intermediate root mid_i.
+//   8. RECIPIENT leg (Transfer only). A second 16-level path carries the
+//      recipient leaf from mid_i up to r_{i+1}:
+//        to_old_leaf = Poseidon(to_x, to_old_bal + 2^64·to_nonce)
+//        to_new_bal  = to_old_bal + is_xfer·value
+//        to_new_leaf = Poseidon(to_x, to_new_bal + 2^64·to_nonce)
+//      The recipient's nonce is NOT consumed — they did not sign.
+//      is_xfer·(to_x − dest) = 0 binds the credited leaf to the signed dest,
+//      so a sequencer cannot redirect a transfer to itself.
+//
+//      For every NON-Transfer type is_xfer = 0, hence to_new_bal = to_old_bal
+//      and the two recipient paths are identical, forcing r_{i+1} = mid_i.
+//      The recipient leaf is then muxed to the sender's own post-update leaf
+//      (to_base = new_base) so the witness needs no second tree walk and the
+//      leg is satisfiable even for a NoOp against an EMPTY pad slot, where
+//      new_base = 0 is not a Poseidon image of anything.
+//
+//      A Transfer to a leaf that does not yet exist is impossible by
+//      construction: an empty slot holds 0, while to_old_leaf is a Poseidon
+//      output, so the inclusion check cannot pass. Recipients must already
+//      exist; the sequencer rejects such requests at admission.
+//   9. eh_{i+1} = Poseidon(eh_i, msg_i).
 //
 // Chain glue: r_0 == prev_root, r_N == new_root, eh_N == entries_hash.
 //
@@ -56,6 +76,9 @@
 // Constraint budget (measured by BatchCircuit_test; estimate per entry):
 //   EdDSAGadget ~14.5K + 37 Poseidon (~9K) + ranges (~0.3K) + glue
 //   ≈ 24K per entry  →  ≈ 192K for N=8 at depth 16.
+// Phase 7 adds the recipient leg: 2 leaf hashes + 2*depth path hashes
+// (34 more Poseidon, ~8.3K) + 3 range gadgets, so ≈ 32K per entry.
+// The measured total is printed by BatchCircuit_test — use that, not this.
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCH_CIRCUIT_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCH_CIRCUIT_H_INCLUDED
@@ -81,6 +104,17 @@ struct BatchEntryWitness
     bool is_create = false;         // true: old slot is EMPTY (0)
     std::vector<bool> leaf_pos;     // depth bits, LSB-first (level 0 first)
     std::vector<FieldT> auth_path;  // sibling per level, 0..depth-1
+
+    // ---- Recipient leg (Transfer only) --------------------------------
+    // For every non-Transfer type these are IGNORED: the circuit muxes the
+    // recipient leaf to the sender's own post-update leaf, so the sequencer
+    // supplies the sender's position and auth path again (identical siblings,
+    // since only that one leaf changed) and the leg collapses to a no-op.
+    FieldT to_apk_x = FieldT::zero();  // recipient apk_x; must equal req.dest
+    std::uint64_t to_old_balance = 0;  // recipient balance BEFORE the credit
+    std::uint64_t to_nonce = 0;        // recipient nonce; NOT incremented
+    std::vector<bool> to_leaf_pos;     // recipient position bits
+    std::vector<FieldT> to_auth_path;  // siblings AFTER the sender's update
 };
 
 class BatchCircuit

@@ -130,14 +130,11 @@ BatchRollup2::preflight(PreflightContext const& ctx)
     // — an entry that fails any of these costs the node no pairing cycles.
     for (auto const& e : bp.entries)
     {
-        // Transfer (t1=1, t0=0) is banned by the BatchCircuit's `t1 == w`
-        // constraint, so a Transfer entry can never be part of a satisfiable
-        // witness. Reject it explicitly rather than letting the sequencer
-        // discover it deep inside isSatisfied() — or, worse, letting a
-        // malformed enum byte through to doApply's txType dispatch.
-        if (e.txType == RequestType::Transfer)
-            return temMALFORMED;
-
+        // Transfer moves value between two L2 leaves and touches NO L1
+        // account: it consumes no deposit claim, pays out of no escrow, and
+        // leaves the pool total unchanged. Every guard below and in preclaim
+        // is therefore correctly a no-op for it — the whole statement is
+        // carried by the circuit's recipient leg (BatchCircuit.h §8).
         if (e.txType == RequestType::Withdraw)
         {
             // Bind the L1 payout target to the field the USER signed. The

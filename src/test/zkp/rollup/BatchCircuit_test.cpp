@@ -14,6 +14,7 @@
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
 
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace ripple {
@@ -100,6 +101,16 @@ class BatchCircuit_test : public beast::unit_test::suite
     userKey()
     {
         return FieldT("777888999000111222333");
+    }
+    static FieldT
+    userKeyB()
+    {
+        return FieldT("555666777888999000111");
+    }
+    static FieldT
+    userKeyC()
+    {
+        return FieldT("222333444555666777888");
     }
     static FieldT
     sequencerKey()
@@ -274,16 +285,134 @@ public:
         BEAST_EXPECT(!runScenario(sc));
     }
 
-    void
-    testTransferTypeRejected()
+    // ---- Phase 7: transfers ------------------------------------------
+    //
+    // Three accounts are created by deposits, then A transfers to B. The
+    // `creditIndex` / `creditKey` knobs let a test misdirect the credit while
+    // keeping every OTHER part of the witness internally consistent, so a
+    // failure is attributable to the binding constraint and nothing else.
+    Scenario
+    buildTransfer(
+        std::uint64_t value = 30,
+        std::optional<std::size_t> creditIndex = std::nullopt,
+        std::optional<FieldT> creditKey = std::nullopt)
     {
-        testcase("Phase 6 — reserved Transfer type is UNSATISFIABLE");
+        TestTree tree(kDepth);
+        Scenario sc;
+        sc.prev_root = tree.root();
+
+        struct U
+        {
+            FieldT key;
+            BjjPoint apk;
+            std::uint64_t bal;
+        };
+        std::vector<U> us;
+        for (auto const& k : {userKey(), userKeyB(), userKeyC()})
+            us.push_back({k, EdDSA::derivePublicKey(k), 0});
+        std::uint64_t const seed[3] = {100, 50, 20};
+
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            BatchEntryWitness ew;
+            ew.req = SignedRequest::make(
+                us[i].key, us[i].apk.x, seed[i], 0, RequestType::Deposit);
+            ew.old_balance = 0;
+            ew.is_create = true;
+            ew.leaf_pos = tree.posBits(i);
+            ew.auth_path = tree.authPath(i);
+            sc.entries.push_back(ew);
+
+            us[i].bal = seed[i];
+            AccountLeaf after;
+            after.apk = us[i].apk;
+            after.balance = us[i].bal;
+            after.nonce = 1;
+            tree.leaves[i] = after.hash();
+        }
+
+        // A (leaf 0) transfers `value` to B (leaf 1), unless misdirected.
+        std::size_t const toIdx = creditIndex.value_or(1);
+        {
+            BatchEntryWitness ew;
+            ew.req = SignedRequest::make(
+                us[0].key, us[1].apk.x, value, /*nonce=*/1,
+                RequestType::Transfer);
+            ew.old_balance = us[0].bal;
+            ew.is_create = false;
+            ew.leaf_pos = tree.posBits(0);
+            ew.auth_path = tree.authPath(0);
+
+            // Sender's leaf moves FIRST; the recipient leg is proven against
+            // the tree that update produced.
+            AccountLeaf a;
+            a.apk = us[0].apk;
+            a.balance = us[0].bal - value;
+            a.nonce = 2;
+            tree.leaves[0] = a.hash();
+
+            ew.to_apk_x = creditKey.value_or(us[toIdx].apk.x);
+            ew.to_old_balance = us[toIdx].bal;
+            ew.to_nonce = 1;  // NOT consumed by receiving
+            ew.to_leaf_pos = tree.posBits(toIdx);
+            ew.to_auth_path = tree.authPath(toIdx);
+            sc.entries.push_back(ew);
+
+            AccountLeaf b;
+            b.apk = us[toIdx].apk;
+            b.balance = us[toIdx].bal + value;
+            b.nonce = 1;
+            tree.leaves[toIdx] = b.hash();
+        }
+
+        sc.expected_new_root = tree.root();
+        return sc;
+    }
+
+    void
+    testTransferHappyPath()
+    {
+        testcase("Phase 7 — transfer moves value between two leaves");
         setupOnce();
 
-        auto sc = buildDepositThenWithdraw();
-        sc.entries[1].req = SignedRequest::make(
-            userKey(), FieldT("55"), /*value=*/10, /*nonce=*/1,
-            RequestType::Transfer);
+        auto sc = buildTransfer();
+        BatchCircuit c(sc.entries.size(), kDepth);
+        c.generateConstraints();
+        c.generateWitness(sc.prev_root, sc.entries);
+
+        BEAST_EXPECT(c.isSatisfied());
+        // Proves BOTH legs landed: sender debited, recipient credited, and
+        // the recipient's nonce left alone (any of those wrong => new root
+        // differs from the tree the test built independently).
+        BEAST_EXPECT(c.computedNewRoot() == sc.expected_new_root);
+    }
+
+    void
+    testTransferOverdraftUnsatisfiable()
+    {
+        testcase("Phase 7 — transferring more than the balance is "
+                 "UNSATISFIABLE");
+        setupOnce();
+
+        // A holds 100; move 500. The sender's new balance wraps in the field
+        // and the 64-bit range check cannot be satisfied.
+        BEAST_EXPECT(!runScenario(buildTransfer(500)));
+    }
+
+    void
+    testTransferCannotBeMisdirected()
+    {
+        testcase("Phase 7 — crediting a leaf other than the signed dest is "
+                 "UNSATISFIABLE");
+        setupOnce();
+
+        // Everything is internally consistent — C's leaf really is updated,
+        // the Merkle paths really do chain — but the signed dest names B.
+        // Only is_xfer*(to_x - dest) = 0 catches this. Without that
+        // constraint a sequencer could debit A and credit itself.
+        auto sc = buildTransfer(
+            30, /*creditIndex=*/2,
+            /*creditKey=*/EdDSA::derivePublicKey(userKeyC()).x);
         BEAST_EXPECT(!runScenario(sc));
     }
 
@@ -359,7 +488,9 @@ public:
         testForgedSignatureUnsatisfiable();
         testSequencerCannotInflateValue();
         testReplayUnsatisfiable();
-        testTransferTypeRejected();
+        testTransferHappyPath();
+        testTransferOverdraftUnsatisfiable();
+        testTransferCannotBeMisdirected();
         testNoopPaddingKeepsRoot();
         testProductionSizeConstraintCount();
     }

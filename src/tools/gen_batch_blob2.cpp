@@ -269,6 +269,13 @@ main(int argc, char** argv)
             bool allowEmpty = false;
             std::string destB58;
 
+            // TRANSFER state. A transfer touches NO L1 account: it consumes
+            // no deposit claim and pays out of no escrow, so it is the one
+            // command whose batch moves the root without moving any XRP.
+            bool isXfer = false;
+            std::uint32_t xFrom = 0, xTo = 0;
+            std::uint64_t xDrops = 0;
+
             // BOOTSTRAP <batchId> — a NoOp-only batch. It anchors the
             // sequencer key and the escrow account on L1 without crediting any
             // L2 balance, which backed deposits require before the first
@@ -303,11 +310,37 @@ main(int argc, char** argv)
                 nDeposits = 1;
                 userOffset = 5;
             }
+            // TRANSFER <fromUser> <toUser> <drops> <batchId> — Phase 7.
+            // Both leaves must already hold a balance (only deposits create
+            // accounts, and the circuit cannot prove a credit into an empty
+            // slot). Pure L2: the pool total and every L1 balance are
+            // unchanged, only the root moves.
+            else if (cmd == "TRANSFER")
+            {
+                if (!(is >> xFrom >> xTo >> xDrops >> bid))
+                {
+                    std::cout << "ERROR=expected: TRANSFER <fromUser> "
+                                 "<toUser> <drops> <batchId>\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                if (xFrom == xTo)
+                {
+                    std::cout << "ERROR=self-transfer is not supported\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                isXfer = true;
+                allowEmpty = true;  // the transfer itself fills a slot
+            }
             else if (cmd != "PROVE" || !(is >> nDeposits >> bid))
             {
                 std::cout << "ERROR=expected: PROVE <deposits 0..8> <batchId> "
                              "[withdrawals 0..8] [destB58] | BOOTSTRAP "
-                             "<batchId> | PROVE_MISATTR <batchId> | QUOTE "
+                             "<batchId> | PROVE_MISATTR <batchId> | TRANSFER "
+                             "<fromUser> <toUser> <drops> <batchId> | QUOTE "
                              "<deposits> <batchId> | BALANCES | EXIT\n"
                           << "END\n"
                           << std::flush;
@@ -345,6 +378,47 @@ main(int argc, char** argv)
             }
 
             std::vector<SequencerRequest> reqs;
+
+            if (isXfer)
+            {
+                BjjPoint const fromApk = EdDSA::derivePublicKey(userKey(xFrom));
+                BjjPoint const toApk = EdDSA::derivePublicKey(userKey(xTo));
+                auto const fromAv = seq.account(fromApk.x);
+                auto const toAv = seq.account(toApk.x);
+
+                if (!fromAv || fromAv->balance < xDrops)
+                {
+                    std::cout << "ERROR=user " << xFrom
+                              << " has no L2 balance (or too little) to send "
+                              << xDrops << " drops\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                if (!toAv)
+                {
+                    std::cout << "ERROR=user " << xTo
+                              << " has no L2 leaf — a transfer cannot create "
+                                 "one; fund it with a deposit first\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+
+                SequencerRequest sr;
+                // destination stays zero: no L1 account is involved. The
+                // signed `dest` carries the RECIPIENT'S apk_x, and the
+                // circuit's is_xfer*(to_x - dest) = 0 binds the credited
+                // leaf to it.
+                sr.req = SignedRequest::make(
+                    userKey(xFrom),
+                    toApk.x,
+                    xDrops,
+                    fromAv->nonce,
+                    RequestType::Transfer);
+                reqs.push_back(sr);
+            }
+
             for (auto const& s : depositSpecs(seq, nDeposits, userOffset))
             {
                 SequencerRequest sr;
