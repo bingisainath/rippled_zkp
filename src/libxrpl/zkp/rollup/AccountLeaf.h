@@ -42,11 +42,32 @@
 #include "EdDSA.h"
 #include "PoseidonHash.h"
 
+#include <xrpl/protocol/AccountID.h>
+
 #include <cstdint>
 
 namespace ripple {
 namespace zkp {
 namespace rollup {
+
+// ---------------------------------------------------------------------------
+// Withdraw `dest` encoding — CANONICAL.
+//
+// A withdrawal's signed `dest` field is the 20-byte XRPL AccountID left-padded
+// into a 32-byte big-endian buffer (12 zero bytes, then the AccountID), read as
+// a field element. The value is < 2^160 << p, so the reduction in
+// uint256ToField is always a no-op and the encoding round-trips exactly.
+//
+// WHY THIS MATTERS: BatchProof2Entry carries the payout AccountID in a SEPARATE
+// wire field (`destination`) that the USER's EdDSA signature does not cover.
+// Binding the two — dest == accountIdToField(destination) — is what stops a
+// malicious sequencer redirecting a withdrawal to itself. BatchRollup2::preflight
+// enforces it; without this helper the convention was documentation only.
+uint256
+accountIdToUint256(AccountID const& id);
+
+FieldT
+accountIdToField(AccountID const& id);
 
 // Request kinds. NoOp exists so short batches can be padded with entries
 // that are still provable (a NoOp proves "this leaf did not change").

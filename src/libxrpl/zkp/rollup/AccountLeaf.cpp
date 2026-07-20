@@ -6,9 +6,29 @@
 
 #include "AccountLeaf.h"
 
+#include <cstring>
+
 namespace ripple {
 namespace zkp {
 namespace rollup {
+
+uint256
+accountIdToUint256(AccountID const& id)
+{
+    static_assert(
+        AccountID::bytes == 20, "AccountID must be 20 bytes for this packing");
+    uint256 padded{};  // value-initialised: all 32 bytes zero
+    // Left-pad: 12 zero bytes, then the AccountID in its native order.
+    std::memcpy(padded.begin() + 12, id.data(), AccountID::bytes);
+    return padded;
+}
+
+FieldT
+accountIdToField(AccountID const& id)
+{
+    // < 2^160 < p, so uint256ToField never actually reduces here.
+    return PoseidonHash::uint256ToField(accountIdToUint256(id));
+}
 
 namespace {
 

@@ -44,6 +44,16 @@ class RollupSequencer2_test : public beast::unit_test::suite
         return FieldT("880000110022003300") + FieldT(i);
     }
 
+    // A deterministic, non-zero L1 payout target for withdrawal tests.
+    static AccountID
+    payoutAccount()
+    {
+        AccountID id;
+        for (std::size_t b = 0; b < id.size(); ++b)
+            id.begin()[b] = static_cast<std::uint8_t>(0xA0 + b);
+        return id;
+    }
+
 public:
     void
     testGenesisRootConsistency()
@@ -186,8 +196,16 @@ public:
         std::vector<SequencerRequest> r2;
         {
             SequencerRequest sr;
+            // A withdrawal's signed `dest` MUST encode the L1 payout target
+            // (AccountLeaf.h). buildBatch rejects the batch otherwise, and so
+            // does BatchRollup2::preflight.
+            sr.destination = payoutAccount();
             sr.req = SignedRequest::make(
-                userKey(7), FieldT("999"), 200, 1, RequestType::Withdraw);
+                userKey(7),
+                accountIdToField(sr.destination),
+                200,
+                1,
+                RequestType::Withdraw);
             r2.push_back(sr);
         }
         auto bp2 = seq.buildBatch(r2, 2);
@@ -213,6 +231,94 @@ public:
         }
     }
 
+    // A withdrawal whose signed `dest` does not encode its L1 payout target is
+    // exactly the malicious-sequencer redirect: the user signs "pay AccountID
+    // X" and the sequencer attaches AccountID Y. buildBatch must refuse it
+    // before spending proving time, and BatchRollup2::preflight refuses it
+    // again on-chain.
+    void
+    testWithdrawDestinationMismatchRejected()
+    {
+        testcase("Phase 6 — withdrawal dest/destination mismatch rejected");
+        setupOnce();
+
+        RollupSequencer2 seq(kDepth);
+
+        std::vector<SequencerRequest> r1;
+        {
+            SequencerRequest sr;
+            BjjPoint apk = EdDSA::derivePublicKey(userKey(5));
+            sr.req = SignedRequest::make(
+                userKey(5), apk.x, 500, 0, RequestType::Deposit);
+            r1.push_back(sr);
+        }
+        BEAST_EXPECT(seq.buildBatch(r1, 1).has_value());
+
+        // The user signs a withdrawal to payoutAccount()...
+        AccountID const signedTarget = payoutAccount();
+
+        // ...but the sequencer attaches a DIFFERENT payout AccountID.
+        AccountID redirected;
+        for (std::size_t b = 0; b < redirected.size(); ++b)
+            redirected.begin()[b] = static_cast<std::uint8_t>(0xE0 + b);
+        BEAST_EXPECT(redirected != signedTarget);
+
+        std::vector<SequencerRequest> r2;
+        {
+            SequencerRequest sr;
+            sr.destination = redirected;
+            sr.req = SignedRequest::make(
+                userKey(5),
+                accountIdToField(signedTarget),  // signed for the OTHER target
+                200,
+                1,
+                RequestType::Withdraw);
+            r2.push_back(sr);
+        }
+        BEAST_EXPECT(!seq.buildBatch(r2, 2).has_value());
+
+        // A zero payout target is equally invalid.
+        std::vector<SequencerRequest> r3;
+        {
+            SequencerRequest sr;  // sr.destination left as AccountID{}
+            sr.req = SignedRequest::make(
+                userKey(5),
+                accountIdToField(signedTarget),
+                200,
+                1,
+                RequestType::Withdraw);
+            r3.push_back(sr);
+        }
+        BEAST_EXPECT(!seq.buildBatch(r3, 2).has_value());
+
+        // The sequencer's state must be untouched by the rejected batches.
+        auto a = seq.account(EdDSA::derivePublicKey(userKey(5)).x);
+        BEAST_EXPECT(a.has_value());
+        if (a)
+        {
+            BEAST_EXPECT(a->balance == 500);
+            BEAST_EXPECT(a->nonce == 1);
+        }
+    }
+
+    // Transfer is reserved: the BatchCircuit bans it via `t1 == w`, so the
+    // sequencer must reject it at admission rather than at isSatisfied().
+    void
+    testTransferRejectedAtAdmission()
+    {
+        testcase("Phase 6 — Transfer rejected at admission (reserved)");
+        setupOnce();
+
+        RollupSequencer2 seq(kDepth);
+        auto const req = SignedRequest::make(
+            userKey(3),
+            EdDSA::derivePublicKey(userKey(4)).x,
+            10,
+            0,
+            RequestType::Transfer);
+        BEAST_EXPECT(!seq.admit(req));
+    }
+
     void
     run() override
     {
@@ -220,6 +326,8 @@ public:
         testBuildBatchAndVerify();
         testTamperedNewRootRejected();
         testReplayedNonceRejectedByAdmission();
+        testWithdrawDestinationMismatchRejected();
+        testTransferRejectedAtAdmission();
         testSecondBatchChains();
     }
 };

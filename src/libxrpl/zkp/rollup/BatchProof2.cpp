@@ -180,6 +180,16 @@ BatchProof2::isWellFormed() const
         return false;
     if (proof.empty())
         return false;
+    // deserialize() casts a raw wire byte to RequestType, so an out-of-range
+    // value can reach us here. Reject it structurally — packMeta would
+    // otherwise fold a nonsense type into the entries hash.
+    // RequestType is a contiguous 0..3 enum; NoOp is the largest valid value.
+    for (auto const& e : entries)
+    {
+        if (static_cast<std::uint8_t>(e.txType) >
+            static_cast<std::uint8_t>(RequestType::NoOp))
+            return false;
+    }
     std::size_t const total = BATCH2_HEADER_BYTES + proof.size() +
         entries.size() * BATCH2_ENTRY_BYTES + BATCH2_SIG_BYTES;
     if (total > MAX_BATCH2_BLOB_BYTES)
