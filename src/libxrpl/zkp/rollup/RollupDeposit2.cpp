@@ -95,7 +95,21 @@ RollupDeposit2::preclaim(PreclaimContext const& ctx)
 
     auto const amount = ctx.tx.getFieldAmount(sfAmount).xrp();
 
-    // The counter is the whole soundness argument, so it must never wrap.
+    // Bound the queue. It lives in an SLE every validator stores and rehashes
+    // for the life of the network, and a deposit costs only a fee — so an
+    // unbounded queue is a cheap griefing vector. The sequencer must drain it
+    // (8 claims per batch) before more can be accepted.
+    if (RollupState2::depositClaims(*sle).size() >=
+        RollupState2::kMaxDepositClaims)
+    {
+        JLOG(ctx.j.warn())
+            << "RollupDeposit2: deposit queue full ("
+            << RollupState2::kMaxDepositClaims
+            << " claims) → tecOVERSIZE";
+        return tecOVERSIZE;
+    }
+
+    // The aggregate is the whole soundness argument, so it must never wrap.
     auto const pending = RollupState2::pendingDeposits(*sle);
     if (pending >
         std::numeric_limits<std::uint64_t>::max() -
@@ -150,11 +164,17 @@ RollupDeposit2::doApply()
         sfBalance, (*escrowSle)[sfBalance] + STAmount(amount));
     view.update(escrowSle);
 
-    // Record the claim. A batch Deposit entry may now consume up to this much.
-    RollupState2::setPendingDeposits(
-        *sle,
-        RollupState2::pendingDeposits(*sle) +
-            static_cast<std::uint64_t>(amount.drops()));
+    // Record the claim against the leaf the depositor named. A batch may now
+    // credit that apk_x, for exactly this many drops, and nothing else —
+    // BatchRollup2::preclaim enforces the match. Storing only the total would
+    // let a sequencer consume this deposit while crediting its own leaf.
+    auto claims = RollupState2::depositClaims(*sle);
+    if (claims.size() >= RollupState2::kMaxDepositClaims)
+        return tecOVERSIZE;  // preclaim checked; re-check before mutating
+    claims.push_back(
+        {tx.getFieldH256(sfDepositApk),
+         static_cast<std::uint64_t>(amount.drops())});
+    RollupState2::setDepositClaims(*sle, claims);
     view.update(sle);
 
     JLOG(j_.info()) << "RollupDeposit2: escrowed " << amount.drops()

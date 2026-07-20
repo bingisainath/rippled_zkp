@@ -27,6 +27,60 @@ namespace ripple {
 
 using namespace zkp::rollup;
 
+namespace {
+
+// Match a batch's Deposit entries against the outstanding deposit claims.
+//
+// Each Deposit entry must consume a DISTINCT claim whose apk_x and drops both
+// match exactly. Matching on apk_x is what closes the misattribution hole: the
+// scalar total alone proves a batch credits no more than was escrowed, but not
+// that it credits the depositor who paid. Exact-match on drops (rather than
+// <=) keeps a claim indivisible — partial consumption would leave ambiguity
+// about what remains owed to whom.
+//
+// Deliberately NOT strict FIFO. A Deposit entry carries the depositor's
+// in-circuit EdDSA signature, so the sequencer cannot construct one without
+// that depositor's cooperation. Under FIFO a single depositor who escrows and
+// then never submits the matching L2 request would stall the queue head
+// permanently and block deposits for everyone. Order-independent matching
+// gives the same attribution guarantee with no head-of-line blocking; the
+// censorship property FIFO would have added needs a reclaim path instead.
+//
+// On success `consumed` is filled with the index of the claim each Deposit
+// entry matched, so doApply can erase exactly those.
+bool
+matchDepositClaims(
+    std::vector<BatchProof2Entry> const& entries,
+    std::vector<RollupState2::DepositClaim> const& claims,
+    std::vector<std::size_t>& consumed)
+{
+    std::vector<bool> used(claims.size(), false);
+    consumed.clear();
+
+    for (auto const& e : entries)
+    {
+        if (e.txType != RequestType::Deposit)
+            continue;
+
+        bool found = false;
+        for (std::size_t i = 0; i < claims.size(); ++i)
+        {
+            if (used[i] || claims[i].apk != e.fromApkX ||
+                claims[i].drops != e.value)
+                continue;
+            used[i] = true;
+            consumed.push_back(i);
+            found = true;
+            break;
+        }
+        if (!found)
+            return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 NotTEC
 BatchRollup2::preflight(PreflightContext const& ctx)
 {
@@ -232,6 +286,8 @@ BatchRollup2::preclaim(PreclaimContext const& ctx)
     // nothing, invisible to XRPNotCreated (it ignores ltROLLUP_STATE).
     if (totalDeposit > 0)
     {
+        // Fast path: the retained aggregate rules out an over-credit without
+        // walking the claim array.
         std::uint64_t const pending =
             sle ? RollupState2::pendingDeposits(*sle) : 0;
         if (pending < totalDeposit)
@@ -241,6 +297,23 @@ BatchRollup2::preclaim(PreclaimContext const& ctx)
                 << " drops of deposits but only " << pending
                 << " are escrowed → tecINSUF_RESERVE_LINE";
             return tecINSUF_RESERVE_LINE;
+        }
+
+        // Attribution: every Deposit entry must consume a distinct claim
+        // matching on BOTH apk_x and drops. entriesHash is already a public
+        // input recomputed natively below, so these same entries are bound
+        // into the proven statement — checking them here makes a
+        // misattributed deposit unprovable, not merely rejected.
+        std::vector<std::size_t> consumed;
+        auto const claims = sle ? RollupState2::depositClaims(*sle)
+                                : std::vector<RollupState2::DepositClaim>{};
+        if (!matchDepositClaims(bp.entries, claims, consumed))
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup2: a Deposit entry does not match any "
+                   "outstanding claim on (apk_x, drops) → "
+                   "tecFAILED_PROCESSING";
+            return tecFAILED_PROCESSING;
         }
     }
 
@@ -316,8 +389,15 @@ BatchRollup2::doApply()
         return tefINTERNAL;
 
     // Backed deposits: every drop credited to an L2 leaf must already have
-    // been paid into escrow by a ttROLLUP_DEPOSIT2 the depositor signed.
-    // preclaim checked the aggregate; consume it entry by entry here.
+    // been paid into escrow by a ttROLLUP_DEPOSIT2 the depositor signed, AND
+    // must credit the leaf that depositor named. preclaim proved both; re-run
+    // the match here so the mutation below cannot diverge from what was
+    // checked (belt and braces — this is the code that actually erases).
+    auto claims = RollupState2::depositClaims(*sle);
+    std::vector<std::size_t> consumed;
+    if (!matchDepositClaims(bp.entries, claims, consumed))
+        return tecFAILED_PROCESSING;
+
     std::uint64_t pending = RollupState2::pendingDeposits(*sle);
 
     for (auto const& e : bp.entries)
@@ -384,7 +464,24 @@ BatchRollup2::doApply()
     if (poolDrops < 0)
         return tefINTERNAL;
     sle->setFieldAmount(sfBalance, STAmount(XRPAmount(poolDrops)));
-    RollupState2::setPendingDeposits(*sle, pending);
+
+    // Erase exactly the claims this batch consumed. setDepositClaims also
+    // rewrites the aggregate, so it stays consistent with the array; `pending`
+    // is recomputed from the survivors rather than trusted.
+    if (!consumed.empty())
+    {
+        std::vector<bool> drop(claims.size(), false);
+        for (auto i : consumed)
+            drop[i] = true;
+
+        std::vector<RollupState2::DepositClaim> remaining;
+        remaining.reserve(claims.size() - consumed.size());
+        for (std::size_t i = 0; i < claims.size(); ++i)
+            if (!drop[i])
+                remaining.push_back(claims[i]);
+
+        RollupState2::setDepositClaims(*sle, remaining);
+    }
 
     RollupState2::setBatchCounter(*sle, bp.batchId);
     RollupState2::setRollupRoot(*sle, bp.newRoot);

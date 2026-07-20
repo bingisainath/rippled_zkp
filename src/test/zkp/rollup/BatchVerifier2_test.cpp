@@ -161,22 +161,48 @@ class BatchVerifier2_test : public beast::unit_test::suite
         return tx;
     }
 
+    // The apk_x a deposit batch will credit for L2 user `i`. The claim stored
+    // by ttROLLUP_DEPOSIT2 must name this exact value or the batch is refused.
+    static uint256
+    userApk(std::size_t i)
+    {
+        return PoseidonHash::fieldToUint256(
+            EdDSA::derivePublicKey(userKey(i)).x);
+    }
+
     // Phase 1 of the two-phase deposit: real XRP from a real AccountRoot into
-    // the anchored escrow.
+    // the anchored escrow, claimed against a named L2 leaf.
     Json::Value
     rollupDeposit2Tx(
         jtx::Account const& depositor,
         jtx::Account const& escrow,
-        std::uint64_t drops)
+        std::uint64_t drops,
+        uint256 const& apk)
     {
         Json::Value tx;
         tx[jss::TransactionType] = "RollupDeposit2";
         tx[jss::Account] = depositor.human();
         tx[jss::Destination] = escrow.human();
         tx[jss::Amount] = std::to_string(drops);
-        tx[jss::DepositApk] =
-            to_string(PoseidonHash::fieldToUint256(userKey(0)));
+        tx[jss::DepositApk] = to_string(apk);
         return tx;
+    }
+
+    // Deposits for L2 users 0..n-1, each claimed at the value
+    // Chain::deposits(_, n) will credit (1000 + i).
+    void
+    escrowFor(
+        jtx::Env& env,
+        jtx::Account const& depositor,
+        jtx::Account const& escrow,
+        std::size_t n)
+    {
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            env(rollupDeposit2Tx(depositor, escrow, 1000 + i, userApk(i)),
+                jtx::ter(tesSUCCESS));
+            env.close();
+        }
     }
 
 public:
@@ -236,10 +262,8 @@ public:
         auto const escrowBefore = env.balance(submitter).value().xrp();
         auto const depositorBefore = env.balance(depositor).value().xrp();
 
-        // Phase 1: real XRP moves depositor -> escrow.
-        env(rollupDeposit2Tx(depositor, submitter, need),
-            jtx::ter(tesSUCCESS));
-        env.close();
+        // Phase 1: real XRP moves depositor -> escrow, one claim per L2 leaf.
+        escrowFor(env, depositor, submitter, 3);
 
         BEAST_EXPECT(
             env.balance(submitter).value().xrp() ==
@@ -318,13 +342,219 @@ public:
         env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
         env.close();
 
-        // Escrow one drop less than the batch will try to credit.
-        env(rollupDeposit2Tx(depositor, submitter, depositBatchDrops(3) - 1),
-            jtx::ter(tesSUCCESS));
-        env.close();
+        // Only two of the three leaves the batch will credit are claimed, so
+        // the aggregate fast-path catches it before the per-claim match runs.
+        escrowFor(env, depositor, submitter, 2);
 
         env(batchRollup2Tx(submitter, c.deposits(2, 3)),
             jtx::ter(tecINSUF_RESERVE_LINE));
+    }
+
+    void
+    testMisattributedDepositRejected()
+    {
+        testcase("Phase 6 — deposit credited to the WRONG apk_x is rejected");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_misattrib");
+        env.fund(jtx::XRP(100000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // Alice escrows 1000 drops naming HER leaf (user 0).
+        env(rollupDeposit2Tx(alice, submitter, 1000, userApk(0)),
+            jtx::ter(tesSUCCESS));
+        env.close();
+
+        {
+            auto sle = env.current()->read(keylet::rollup_state2());
+            auto const claims = RollupState2::depositClaims(*sle);
+            BEAST_EXPECT(claims.size() == 1);
+            if (claims.size() == 1)
+            {
+                BEAST_EXPECT(claims[0].apk == userApk(0));
+                BEAST_EXPECT(claims[0].drops == 1000);
+            }
+        }
+
+        // The sequencer builds a batch crediting a DIFFERENT leaf (user 5) for
+        // the same 1000 drops. The aggregate total still balances — 1000
+        // escrowed, 1000 credited — so the scalar check passes. Only the
+        // per-claim apk_x match catches it.
+        //
+        // Chain::deposits credits user i with 1000 + i, so user 5 would be
+        // 1005; build the entry explicitly at 1000 to keep the totals equal
+        // and isolate attribution from the value check below.
+        SequencerRequest sr;
+        BjjPoint apk5 = EdDSA::derivePublicKey(userKey(5));
+        sr.req = SignedRequest::make(
+            userKey(5), apk5.x, 1000, 0, RequestType::Deposit);
+        auto bb = c.build({sr}, 2);
+
+        env(batchRollup2Tx(submitter, bb), jtx::ter(tecFAILED_PROCESSING));
+        env.close();
+
+        // Alice's claim survives untouched and no L2 balance was created.
+        auto sle = env.current()->read(keylet::rollup_state2());
+        auto const claims = RollupState2::depositClaims(*sle);
+        BEAST_EXPECT(claims.size() == 1);
+        if (claims.size() == 1)
+            BEAST_EXPECT(claims[0].apk == userApk(0));
+        BEAST_EXPECT(sle->getFieldU32(sfBatchCounter) == 1);
+        BEAST_EXPECT(poolDrops(sle) == 0);
+    }
+
+    void
+    testWrongValueDepositRejected()
+    {
+        testcase("Phase 6 — deposit for the wrong VALUE is rejected");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_wrongval");
+        env.fund(jtx::XRP(100000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // Claim names the right leaf but escrows 2000; the batch credits that
+        // leaf only 1000. Exact-match keeps a claim indivisible, so partial
+        // consumption is refused rather than leaving 1000 owed to nobody.
+        env(rollupDeposit2Tx(alice, submitter, 2000, userApk(0)),
+            jtx::ter(tesSUCCESS));
+        env.close();
+
+        env(batchRollup2Tx(submitter, c.deposits(2, 1)),
+            jtx::ter(tecFAILED_PROCESSING));
+    }
+
+    void
+    testTwoClaimsConsumedInOneBatch()
+    {
+        testcase("Phase 6 — two queued claims consumed by one batch");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_two");
+        env.fund(jtx::XRP(100000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        escrowFor(env, alice, submitter, 2);
+        {
+            auto sle = env.current()->read(keylet::rollup_state2());
+            BEAST_EXPECT(RollupState2::depositClaims(*sle).size() == 2);
+            BEAST_EXPECT(
+                sle->getFieldU64(sfPendingDeposits) == depositBatchDrops(2));
+        }
+
+        env(batchRollup2Tx(submitter, c.deposits(2, 2)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        auto sle = env.current()->read(keylet::rollup_state2());
+        BEAST_EXPECT(RollupState2::depositClaims(*sle).empty());
+        BEAST_EXPECT(sle->getFieldU64(sfPendingDeposits) == 0);
+        BEAST_EXPECT(
+            poolDrops(sle) == static_cast<std::int64_t>(depositBatchDrops(2)));
+    }
+
+    void
+    testClaimsConsumedOutOfOrderAccepted()
+    {
+        testcase("Phase 6 — claims may be consumed out of queue order");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_order");
+        env.fund(jtx::XRP(100000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // Escrow user 1's claim FIRST, then user 0's.
+        env(rollupDeposit2Tx(alice, submitter, 1001, userApk(1)),
+            jtx::ter(tesSUCCESS));
+        env.close();
+        env(rollupDeposit2Tx(alice, submitter, 1000, userApk(0)),
+            jtx::ter(tesSUCCESS));
+        env.close();
+
+        // The batch credits user 0 then user 1 — the reverse of queue order.
+        // Matching is order-independent by design: under strict FIFO a
+        // depositor who never sends the matching L2 request would stall the
+        // head and block deposits for everyone.
+        env(batchRollup2Tx(submitter, c.deposits(2, 2)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        auto sle = env.current()->read(keylet::rollup_state2());
+        BEAST_EXPECT(RollupState2::depositClaims(*sle).empty());
+    }
+
+    void
+    testMoreDepositsThanClaimsRejected()
+    {
+        testcase("Phase 6 — batch with more Deposit entries than claims");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_more");
+        env.fund(jtx::XRP(100000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // One claim escrowed, but the batch credits two leaves. The aggregate
+        // is short, so this is caught by the fast path.
+        escrowFor(env, alice, submitter, 1);
+
+        env(batchRollup2Tx(submitter, c.deposits(2, 2)),
+            jtx::ter(tecINSUF_RESERVE_LINE));
+    }
+
+    void
+    testDepositQueueCap()
+    {
+        testcase("Phase 6 — deposit queue cap rejects further deposits");
+        jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
+        auto submitter = freshSubmitter(env);
+        jtx::Account alice("alice2_cap");
+        env.fund(jtx::XRP(1000000), alice);
+        env.close();
+
+        Chain c;
+        env(batchRollup2Tx(submitter, c.bootstrap(1)), jtx::ter(tesSUCCESS));
+        env.close();
+
+        // Fill the queue. No proving involved, so this is cheap despite the
+        // count; closing every few ledgers keeps the open ledger small.
+        for (std::size_t i = 0; i < RollupState2::kMaxDepositClaims; ++i)
+        {
+            env(rollupDeposit2Tx(alice, submitter, 1000 + i, userApk(i)),
+                jtx::ter(tesSUCCESS));
+            if (i % 32 == 31)
+                env.close();
+        }
+        env.close();
+
+        {
+            auto sle = env.current()->read(keylet::rollup_state2());
+            BEAST_EXPECT(
+                RollupState2::depositClaims(*sle).size() ==
+                RollupState2::kMaxDepositClaims);
+        }
+
+        // One more must be refused: the queue lives in an SLE every validator
+        // stores forever, and deposits cost only a fee.
+        env(rollupDeposit2Tx(alice, submitter, 5000, userApk(900)),
+            jtx::ter(tecOVERSIZE));
     }
 
     void
@@ -344,7 +574,7 @@ public:
 
         // Paying an account of the depositor's choosing would let them park
         // collateral somewhere the rollup cannot spend it from.
-        env(rollupDeposit2Tx(depositor, impostor, 5000),
+        env(rollupDeposit2Tx(depositor, impostor, 5000, userApk(0)),
             jtx::ter(tecNO_PERMISSION));
     }
 
@@ -360,7 +590,7 @@ public:
 
         // No state SLE yet. Letting this through would let the first depositor
         // nominate an escrow account they control.
-        env(rollupDeposit2Tx(depositor, submitter, 5000),
+        env(rollupDeposit2Tx(depositor, submitter, 5000, userApk(0)),
             jtx::ter(tecNO_ENTRY));
     }
 
@@ -390,8 +620,7 @@ public:
 
         // Fund L2 user 0 with 1000 drops, backed by a real L1 deposit.
         auto const need = depositBatchDrops(1);
-        env(rollupDeposit2Tx(depositor, submitter, need), jtx::ter(tesSUCCESS));
-        env.close();
+        escrowFor(env, depositor, submitter, 1);
         env(batchRollup2Tx(submitter, c.deposits(2, 1)), jtx::ter(tesSUCCESS));
         env.close();
 
@@ -451,8 +680,7 @@ public:
         env.close();
 
         auto const need = depositBatchDrops(1);
-        env(rollupDeposit2Tx(depositor, submitter, need), jtx::ter(tesSUCCESS));
-        env.close();
+        escrowFor(env, depositor, submitter, 1);
         env(batchRollup2Tx(submitter, c.deposits(2, 1)), jtx::ter(tesSUCCESS));
         env.close();
 
@@ -489,9 +717,7 @@ public:
         // so it does NOT move the root. Apply a real deposit batch to advance
         // it, otherwise a fresh sequencer's prevRoot still matches on-chain
         // and this test would exercise the wrong rejection path.
-        env(rollupDeposit2Tx(depositor, submitter, depositBatchDrops(1)),
-            jtx::ter(tesSUCCESS));
-        env.close();
+        escrowFor(env, depositor, submitter, 1);
         env(batchRollup2Tx(submitter, c1.deposits(2, 1)),
             jtx::ter(tesSUCCESS));
         env.close();
@@ -516,6 +742,12 @@ public:
         testPartiallyBackedDepositRejected();
         testDepositToWrongEscrowRejected();
         testDepositBeforeBootstrapRejected();
+        testMisattributedDepositRejected();
+        testWrongValueDepositRejected();
+        testTwoClaimsConsumedInOneBatch();
+        testClaimsConsumedOutOfOrderAccepted();
+        testMoreDepositsThanClaimsRejected();
+        testDepositQueueCap();
         testWithdrawalMovesRealXRP();
         testWithdrawalBeyondEscrowRejected();
         testWrongPrevRootRejected();

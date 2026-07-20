@@ -44,6 +44,15 @@ InnerObjectFormats::InnerObjectFormats()
             {sfTxnSignature, soeREQUIRED},
         });
 
+    // ZK-Rollup Track 2: one outstanding deposit claim. A batch Deposit entry
+    // may consume a claim only by matching BOTH fields exactly.
+    add(sfDepositClaim.jsonName.c_str(),
+        sfDepositClaim.getCode(),
+        {
+            {sfDepositApk, soeREQUIRED},
+            {sfClaimDrops, soeREQUIRED},
+        });
+
     add(sfMajority.jsonName.c_str(),
         sfMajority.getCode(),
         {

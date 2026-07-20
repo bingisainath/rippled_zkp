@@ -745,6 +745,9 @@ JSS(RollupRoot);       // sfRollupRoot — Phase 1 rollup state
 JSS(TxCount);          // sfTxCount — Phase 1 rollup batch size
 JSS(SequencerPubKey);  // sfSequencerPubKey — Phase 1 rollup auth
 JSS(DepositApk);       // sfDepositApk — Phase 6 backed deposit target leaf
+JSS(DepositClaims);    // sfDepositClaims — Phase 6 per-claim deposit queue
+JSS(DepositClaim);     // sfDepositClaim — Phase 6 one {apk_x, drops} claim
+JSS(ClaimDrops);       // sfClaimDrops — Phase 6 drops in one claim
 JSS(PendingDeposits);  // sfPendingDeposits — Phase 6 escrowed, uncredited
 JSS(EscrowAccount);    // sfEscrowAccount — Phase 6 L1 collateral holder
 JSS(nullifier);

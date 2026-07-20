@@ -466,8 +466,9 @@ LEDGER_ENTRY(ltROLLUP_STATE,   0x0084, RollupState,   ({
     {sfOwnerCount,      soeREQUIRED},
     {sfBalance,         soeOPTIONAL},
     {sfTreeFrontier,    soeOPTIONAL},
-    {sfPendingDeposits, soeOPTIONAL},  // Track 2: escrowed, not yet credited
+    {sfPendingDeposits, soeOPTIONAL},  // Track 2: aggregate of sfDepositClaims
     {sfEscrowAccount,   soeOPTIONAL},  // Track 2: L1 collateral holder
+    {sfDepositClaims,   soeOPTIONAL},  // Track 2: per-claim {apk_x, drops} queue
 }))
 
 LEDGER_ENTRY(ltNULLIFIER_PAGE, 0x0085, NullifierPage, ({

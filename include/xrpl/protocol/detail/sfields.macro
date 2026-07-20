@@ -429,7 +429,17 @@ TYPED_SFIELD(sfRollupTreeDepth,   UINT8,    6)  // renamed from sfTreeDepth
 // enforces "total L2 credits <= total L1 payments".
 // -----------------------------------------------------------------------------
 
-TYPED_SFIELD(sfPendingDeposits,   UINT64,  78)  // drops escrowed, not yet credited to L2
+TYPED_SFIELD(sfPendingDeposits,   UINT64,  78)  // aggregate of sfDepositClaims, kept as a fast path
 TYPED_SFIELD(sfEscrowAccount,     ACCOUNT, 25)  // L1 account holding rollup collateral
 TYPED_SFIELD(sfDepositApk,        UINT256, 75)  // Baby Jubjub apk_x of the L2 leaf to credit
+TYPED_SFIELD(sfClaimDrops,        UINT64,  79)  // drops escrowed by one deposit claim
+
+// Per-claim deposit queue. The scalar sfPendingDeposits alone proves only that
+// a batch credits no MORE than was escrowed — it says nothing about WHOSE
+// deposit it was, so a sequencer could consume Alice's 1000 drops while
+// crediting its own apk_x. Storing the depositor's target leaf alongside the
+// amount lets BatchRollup2::preclaim require an exact (apk_x, drops) match
+// before a Deposit entry may consume a claim.
+UNTYPED_SFIELD(sfDepositClaims,   ARRAY,   28)  // outstanding claims on ltROLLUP_STATE
+UNTYPED_SFIELD(sfDepositClaim,    OBJECT,  34)  // one {sfDepositApk, sfClaimDrops}
 TYPED_SFIELD(sfTreeFrontier,    VL,    37)   // Phase 4a: serialised RollupMerkleTree frontier

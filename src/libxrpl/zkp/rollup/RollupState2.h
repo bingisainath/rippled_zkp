@@ -53,9 +53,33 @@ public:
     static uint256       rollupRoot  (STLedgerEntry const& sle);
     static std::uint8_t  treeDepth   (STLedgerEntry const& sle);
 
-    // Drops paid into escrow by ttROLLUP_DEPOSIT2 but not yet credited to an
-    // L2 leaf by a batch. Absent on state SLEs created before this field
-    // existed, so the reader treats "missing" as 0.
+    // One outstanding deposit: the depositor paid `drops` into escrow and
+    // named `apk` as the L2 leaf to credit. A batch Deposit entry may consume
+    // this claim only by matching BOTH fields exactly.
+    struct DepositClaim
+    {
+        uint256 apk;
+        std::uint64_t drops;
+    };
+
+    // Deposits paid in but not yet credited. Cap chosen so the array stays a
+    // few KB: every validator stores and rehashes this SLE forever, and
+    // deposits are cheap, so an unbounded queue is a griefing vector.
+    static constexpr std::size_t kMaxDepositClaims = 256;
+
+    // Outstanding claims, in the order they were escrowed. Absent on state
+    // SLEs created before the queue existed, which reads as empty.
+    static std::vector<DepositClaim>
+    depositClaims(STLedgerEntry const& sle);
+
+    static void
+    setDepositClaims(
+        STLedgerEntry& sle,
+        std::vector<DepositClaim> const& claims);
+
+    // Aggregate of depositClaims(), retained as a field so preclaim's
+    // fast-path total does not have to walk the array. Absent on state SLEs
+    // created before this field existed, so the reader treats "missing" as 0.
     static std::uint64_t pendingDeposits(STLedgerEntry const& sle);
 
     // The L1 AccountRoot holding rollup collateral. Anchored once at genesis

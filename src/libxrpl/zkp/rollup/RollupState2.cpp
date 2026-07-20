@@ -11,7 +11,9 @@
 #include <libxrpl/zkp/rollup/PoseidonHash.h>
 
 #include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/STArray.h>
 #include <xrpl/protocol/STLedgerEntry.h>
+#include <xrpl/protocol/STObject.h>
 #include <xrpld/ledger/ApplyView.h>
 #include <xrpld/ledger/ReadView.h>
 
@@ -58,6 +60,44 @@ std::uint8_t
 RollupState2::treeDepth(STLedgerEntry const& sle)
 {
     return sle.getFieldU8(sfRollupTreeDepth);
+}
+
+std::vector<RollupState2::DepositClaim>
+RollupState2::depositClaims(STLedgerEntry const& sle)
+{
+    std::vector<DepositClaim> out;
+    if (!sle.isFieldPresent(sfDepositClaims))
+        return out;  // pre-queue state SLE: no outstanding claims
+
+    auto const& arr = sle.getFieldArray(sfDepositClaims);
+    out.reserve(arr.size());
+    for (auto const& o : arr)
+        out.push_back({o.getFieldH256(sfDepositApk),
+                       o.getFieldU64(sfClaimDrops)});
+    return out;
+}
+
+void
+RollupState2::setDepositClaims(
+    STLedgerEntry& sle,
+    std::vector<DepositClaim> const& claims)
+{
+    STArray arr(sfDepositClaims, claims.size());
+    for (auto const& c : claims)
+    {
+        auto o = STObject::makeInnerObject(sfDepositClaim);
+        o.setFieldH256(sfDepositApk, c.apk);
+        o.setFieldU64(sfClaimDrops, c.drops);
+        arr.push_back(std::move(o));
+    }
+    sle.setFieldArray(sfDepositClaims, arr);
+
+    // Keep the aggregate in step: it is a cache of this array, and preclaim's
+    // fast path trusts it.
+    std::uint64_t total = 0;
+    for (auto const& c : claims)
+        total += c.drops;
+    sle.setFieldU64(sfPendingDeposits, total);
 }
 
 std::uint64_t
