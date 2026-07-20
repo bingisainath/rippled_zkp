@@ -22,6 +22,7 @@
 #define RIPPLE_ZKP_ROLLUP_ROLLUPSTATE2_H_INCLUDED
 
 #include <xrpl/basics/base_uint.h>
+#include <xrpl/protocol/AccountID.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 
 #include <cstdint>
@@ -52,8 +53,19 @@ public:
     static uint256       rollupRoot  (STLedgerEntry const& sle);
     static std::uint8_t  treeDepth   (STLedgerEntry const& sle);
 
-    static void setBatchCounter(STLedgerEntry& sle, std::uint32_t v);
-    static void setRollupRoot  (STLedgerEntry& sle, uint256 const& r);
+    // Drops paid into escrow by ttROLLUP_DEPOSIT2 but not yet credited to an
+    // L2 leaf by a batch. Absent on state SLEs created before this field
+    // existed, so the reader treats "missing" as 0.
+    static std::uint64_t pendingDeposits(STLedgerEntry const& sle);
+
+    // The L1 AccountRoot holding rollup collateral. Anchored once at genesis
+    // to the account that submitted the bootstrap batch; deposits pay into it
+    // and withdrawals pay out of it.
+    static AccountID escrowAccount(STLedgerEntry const& sle);
+
+    static void setBatchCounter   (STLedgerEntry& sle, std::uint32_t v);
+    static void setRollupRoot     (STLedgerEntry& sle, uint256 const& r);
+    static void setPendingDeposits(STLedgerEntry& sle, std::uint64_t v);
 
     static std::shared_ptr<STLedgerEntry const>
     read(ReadView const& view);
@@ -64,9 +76,15 @@ public:
     // Creates the Track 2 state SLE with the empty-tree genesis root. Runs
     // once in a network's lifetime. No tree/frontier is stored (Track 2
     // keeps the tree off-chain).
+    //
+    // `escrow` is the L1 account that will hold rollup collateral — the
+    // submitter of this bootstrap batch. Anchoring it here (rather than
+    // letting each deposit name its own) is what stops the first depositor
+    // choosing an escrow they control.
     static std::shared_ptr<STLedgerEntry>
     createGenesis(ApplyView& view,
-                  std::vector<std::uint8_t> const& sequencerPubKey);
+                  std::vector<std::uint8_t> const& sequencerPubKey,
+                  AccountID const& escrow);
 };
 
 }  // namespace rollup

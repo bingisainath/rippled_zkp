@@ -61,6 +61,12 @@ RollupSequencer2::admit(SignedRequest const& req) const
     if (!req.verifySignature())
         return false;
 
+    // Transfer is reserved: the BatchCircuit's `t1 == w` constraint makes a
+    // Transfer entry structurally unprovable, so admitting one would only
+    // surface as an isSatisfied() failure after the batch was assembled.
+    if (req.type == RequestType::Transfer)
+        return false;
+
     if (req.type == RequestType::NoOp)
         return true;
 
@@ -132,6 +138,45 @@ RollupSequencer2::buildBatch(
             auto const& req = sr.req;
             if (!admit(req))
                 return std::nullopt;
+
+            // Withdrawals: the signed `dest` must encode the L1 payout target
+            // carried alongside it. BatchRollup2::preflight rejects any batch
+            // where these disagree, so catch it here rather than spending ~38 s
+            // proving a batch L1 will refuse.
+            if (req.type == RequestType::Withdraw &&
+                (sr.destination == AccountID{} ||
+                 req.dest != accountIdToField(sr.destination)))
+                return std::nullopt;
+
+            // An explicit NoOp is shaped exactly like a pad slot: it occupies
+            // an empty leaf, mutates no account and creates nothing. Handle it
+            // before the account lookup below, which would otherwise reject it
+            // because only deposits may create accounts.
+            //
+            // This is what makes a BOOTSTRAP batch possible — a batch that
+            // anchors genesis state (sequencer key, escrow account) without
+            // crediting any L2 balance. Backed deposits need that: the escrow
+            // account must be anchored before the first ttROLLUP_DEPOSIT2, and
+            // isWellFormed() rejects an entirely empty batch (txCount == 0).
+            if (req.type == RequestType::NoOp)
+            {
+                std::size_t const padIndex = padIndexBase + i;
+                ew.req = req;
+                ew.old_balance = 0;
+                ew.is_create = true;
+                ew.leaf_pos = tree.posBits(padIndex);
+                ew.auth_path = tree.authPath(padIndex);
+                witnesses.push_back(ew);
+
+                e.fromApkX = PoseidonHash::fieldToUint256(req.from_apk.x);
+                e.dest = PoseidonHash::fieldToUint256(req.dest);
+                e.value = 0;
+                e.nonce = 0;
+                e.txType = RequestType::NoOp;
+                e.destination = AccountID{};
+                entries.push_back(e);
+                continue;
+            }
 
             FieldT const apkX = req.from_apk.x;
             uint256 const key = PoseidonHash::fieldToUint256(apkX);

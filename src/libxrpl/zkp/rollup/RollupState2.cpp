@@ -60,10 +60,34 @@ RollupState2::treeDepth(STLedgerEntry const& sle)
     return sle.getFieldU8(sfRollupTreeDepth);
 }
 
+std::uint64_t
+RollupState2::pendingDeposits(STLedgerEntry const& sle)
+{
+    // soeOPTIONAL: a state SLE created before backed deposits existed has no
+    // such field, and "no escrowed drops" is the correct reading.
+    return sle.isFieldPresent(sfPendingDeposits)
+        ? sle.getFieldU64(sfPendingDeposits)
+        : 0;
+}
+
+AccountID
+RollupState2::escrowAccount(STLedgerEntry const& sle)
+{
+    return sle.isFieldPresent(sfEscrowAccount)
+        ? sle.getAccountID(sfEscrowAccount)
+        : AccountID{};
+}
+
 void
 RollupState2::setBatchCounter(STLedgerEntry& sle, std::uint32_t v)
 {
     sle.setFieldU32(sfBatchCounter, v);
+}
+
+void
+RollupState2::setPendingDeposits(STLedgerEntry& sle, std::uint64_t v)
+{
+    sle.setFieldU64(sfPendingDeposits, v);
 }
 
 void
@@ -87,7 +111,8 @@ RollupState2::peek(ApplyView& view)
 std::shared_ptr<STLedgerEntry>
 RollupState2::createGenesis(
     ApplyView& view,
-    std::vector<std::uint8_t> const& sequencerPubKey)
+    std::vector<std::uint8_t> const& sequencerPubKey,
+    AccountID const& escrow)
 {
     auto const k = keylet::rollup_state2();
     auto sle = std::make_shared<STLedgerEntry>(k);
@@ -97,6 +122,8 @@ RollupState2::createGenesis(
     sle->setFieldVL(sfSequencerKey, sequencerPubKey);
     sle->setFieldU8(sfRollupTreeDepth, kRollupTreeDepth);
     sle->setFieldU32(sfOwnerCount, 0);
+    sle->setFieldU64(sfPendingDeposits, 0);
+    sle->setAccountID(sfEscrowAccount, escrow);
 
     view.insert(sle);
     return sle;

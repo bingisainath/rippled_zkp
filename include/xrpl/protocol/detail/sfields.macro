@@ -402,9 +402,8 @@ TYPED_SFIELD(sfTimestamp,          UINT32,     77) // Timestamp for the note cre
 
 
 // -----------------------------------------------------------------------------
-// ZK-Rollup foundation fields (Phase 1). Codes confirmed free in v2.2 audit.
-// Do NOT reuse any existing ZKP codes (sfCurrentRoot=36, sfShieldedState=33,
-// sfZKProof=60, etc. — see v2.2 §1.1 full table).
+// ZK-Rollup foundation fields
+// Do NOT reuse any existing ZKP codes (sfCurrentRoot=36, sfShieldedState=33).
 // -----------------------------------------------------------------------------
 
 TYPED_SFIELD(sfBatchProof,        VL,      34)  // was TBD VL/30
@@ -416,4 +415,21 @@ TYPED_SFIELD(sfBatchId,           UINT32,  47)
 TYPED_SFIELD(sfTxCount,           UINT32,  49)
 TYPED_SFIELD(sfBatchCounter,      UINT32,  78)
 TYPED_SFIELD(sfRollupTreeDepth,   UINT8,    6)  // renamed from sfTreeDepth
+
+// -----------------------------------------------------------------------------
+// Track 2 backed deposits (B-lite). A Deposit entry inside a batch credits an
+// L2 leaf but debits nobody on L1 — the depositor holds only a Baby Jubjub key
+// and never signs an XRPL transaction. Without the two fields below a sequencer
+// can credit L2 balance that no one ever paid for, and because XRPNotCreated
+// only sums ltACCOUNT_ROOT/ltPAYCHAN/ltESCROW, the ltROLLUP_STATE balance rises
+// invisibly to the invariant checker.
+//
+// ttROLLUP_DEPOSIT2 debits a real AccountRoot and increments sfPendingDeposits;
+// a batch may then credit L2 leaves only by DECREMENTING it. One counter
+// enforces "total L2 credits <= total L1 payments".
+// -----------------------------------------------------------------------------
+
+TYPED_SFIELD(sfPendingDeposits,   UINT64,  78)  // drops escrowed, not yet credited to L2
+TYPED_SFIELD(sfEscrowAccount,     ACCOUNT, 25)  // L1 account holding rollup collateral
+TYPED_SFIELD(sfDepositApk,        UINT256, 75)  // Baby Jubjub apk_x of the L2 leaf to credit
 TYPED_SFIELD(sfTreeFrontier,    VL,    37)   // Phase 4a: serialised RollupMerkleTree frontier

@@ -510,9 +510,7 @@ TRANSACTION(ttZK_WITHDRAW, 1002, ZkWithdraw, ({
 
 
 // -----------------------------------------------------------------------------
-// ZK-Rollup batch transaction (Phase 1).
-// Code 61 confirmed free in v2.2 §1.2 Phase 0 audit.
-// (Code 40 = ttAMMDelete collision — DO NOT use 40 as in older doc versions.)
+// ZK-Rollup batch transaction 
 // -----------------------------------------------------------------------------
 TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
     {sfBatchProof,       soeREQUIRED},
@@ -524,10 +522,7 @@ TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
 }))
 
 // -----------------------------------------------------------------------------
-// ZK-Rollup Track 2 batch transaction (Phase 6, Option A — monolithic circuit).
-// Code 62: one Groth16 proof per batch, account-based leaves. Runs in parallel
-// with ttBATCH_ROLLUP (61) in the same node/ledger for head-to-head evaluation.
-// Same STTx field set; sfBatchProof carries a BatchProof2 blob.
+// ZK-Rollup Track 2 batch transaction 
 // -----------------------------------------------------------------------------
 TRANSACTION(ttBATCH_ROLLUP2, 62, BatchRollup2, ({
     {sfBatchProof,       soeREQUIRED},
@@ -536,4 +531,16 @@ TRANSACTION(ttBATCH_ROLLUP2, 62, BatchRollup2, ({
     {sfRollupRoot,       soeREQUIRED},
     {sfTxCount,          soeREQUIRED},
     {sfSequencerPubKey,  soeREQUIRED},
+}))
+
+// -----------------------------------------------------------------------------
+// ZK-Rollup Track 2 backed deposit (phase 1 of the two-phase deposit).
+// Signed by the DEPOSITOR with their ordinary XRPL key, so real XRP moves from
+// a real AccountRoot into escrow. Phase 2 (a ttBATCH_ROLLUP2 Deposit entry)
+// can then only consume what this recorded.
+// -----------------------------------------------------------------------------
+TRANSACTION(ttROLLUP_DEPOSIT2, 63, RollupDeposit2, ({
+    {sfAmount,      soeREQUIRED},  // XRP only, > 0
+    {sfDepositApk,  soeREQUIRED},  // Baby Jubjub apk_x of the L2 leaf to credit
+    {sfDestination, soeREQUIRED},  // must equal the anchored sfEscrowAccount
 }))

@@ -72,6 +72,40 @@ BatchRollup2::preflight(PreflightContext const& ctx)
         tx.getFieldH256(sfRollupRoot) != bp.newRoot)
         return temMALFORMED;
 
+    // Per-entry policy. All stateless, so it runs here rather than in preclaim
+    // — an entry that fails any of these costs the node no pairing cycles.
+    for (auto const& e : bp.entries)
+    {
+        // Transfer (t1=1, t0=0) is banned by the BatchCircuit's `t1 == w`
+        // constraint, so a Transfer entry can never be part of a satisfiable
+        // witness. Reject it explicitly rather than letting the sequencer
+        // discover it deep inside isSatisfied() — or, worse, letting a
+        // malformed enum byte through to doApply's txType dispatch.
+        if (e.txType == RequestType::Transfer)
+            return temMALFORMED;
+
+        if (e.txType == RequestType::Withdraw)
+        {
+            // Bind the L1 payout target to the field the USER signed. The
+            // user's EdDSA covers `dest` (inside msg) but NOT `destination`
+            // — without this check a malicious sequencer could prove a
+            // withdrawal to one AccountID and pay out to another.
+            if (e.destination == AccountID{})
+                return temMALFORMED;
+            if (PoseidonHash::uint256ToField(e.dest) !=
+                accountIdToField(e.destination))
+                return temMALFORMED;
+        }
+        else
+        {
+            // Canonical form: destination is meaningful only for withdrawals.
+            // computeBatchHash() covers every entry byte, so leaving junk here
+            // would let two distinct blobs carry the same proof.
+            if (e.destination != AccountID{})
+                return temMALFORMED;
+        }
+    }
+
     // ONE Groth16 proof — reject an implausibly sized blob before preclaim
     // spends any pairing cycles (also the malformed-proof DoS guard).
     if (bp.proof.size() < 64 || bp.proof.size() > 256)
@@ -115,6 +149,25 @@ BatchRollup2::preclaim(PreclaimContext const& ctx)
     {
         expectedPrevRoot = sle->getFieldH256(sfRollupRoot);
         expectedBatchId = sle->getFieldU32(sfBatchCounter) + 1;
+
+        // Permissioned sequencer: the submitter must be the key anchored at
+        // genesis. preflight already proved they HOLD this key (Ed25519 over
+        // computeBatchHash); this proves it is the RIGHT key.
+        //
+        // Track 2 keeps the account tree off-chain in the sequencer's memory,
+        // so a second party submitting a valid batch would advance the on-chain
+        // root out from under the legitimate sequencer and brick every
+        // subsequent batch it builds (its prevRoot would no longer match).
+        // The proof guarantees correctness, but not liveness — hence the gate.
+        if (sle->isFieldPresent(sfSequencerKey) &&
+            sle->getFieldVL(sfSequencerKey) !=
+                ctx.tx.getFieldVL(sfSequencerPubKey))
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup2: submitter is not the anchored sequencer "
+                   "→ tecNO_PERMISSION";
+            return tecNO_PERMISSION;
+        }
     }
 
     // Root-chain: this batch must start where the last one ended.
@@ -126,10 +179,13 @@ BatchRollup2::preclaim(PreclaimContext const& ctx)
 
     // Pool solvency for withdrawals (fail fast before the pairing check).
     std::int64_t totalWithdrawal = 0;
+    std::uint64_t totalDeposit = 0;
     for (auto const& e : bp.entries)
     {
         if (e.txType == RequestType::Withdraw)
             totalWithdrawal += static_cast<std::int64_t>(e.value);
+        else if (e.txType == RequestType::Deposit)
+            totalDeposit += e.value;
     }
     if (totalWithdrawal > 0)
     {
@@ -137,7 +193,55 @@ BatchRollup2::preclaim(PreclaimContext const& ctx)
         if (sle && sle->isFieldPresent(sfBalance))
             poolBalance = sle->getFieldAmount(sfBalance).xrp().drops();
         if (poolBalance < totalWithdrawal)
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup2: pool holds " << poolBalance
+                << " drops, batch withdraws " << totalWithdrawal
+                << " → tecINSUF_RESERVE_LINE";
             return tecINSUF_RESERVE_LINE;
+        }
+
+        // The escrow account funds withdrawal payouts, so it must cover them
+        // without dropping below its own reserve. doApply used to subtract
+        // unconditionally, which could drive the balance negative. Mirror
+        // doApply's fallback: before genesis the submitter IS the escrow.
+        auto const escrow = sle ? RollupState2::escrowAccount(*sle)
+                                : AccountID{};
+        auto const escrowSle = ctx.view.read(keylet::account(
+            escrow != AccountID{} ? escrow
+                                  : ctx.tx.getAccountID(sfAccount)));
+        if (!escrowSle)
+            return terNO_ACCOUNT;
+        auto const balance = STAmount((*escrowSle)[sfBalance]).xrp();
+        auto const reserve =
+            ctx.view.fees().accountReserve((*escrowSle)[sfOwnerCount]);
+        if (balance < reserve + XRPAmount(totalWithdrawal))
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup2: escrow holds " << balance.drops()
+                << " drops against reserve " << reserve.drops()
+                << " and payouts " << totalWithdrawal
+                << " → tecINSUF_RESERVE_LINE";
+            return tecINSUF_RESERVE_LINE;
+        }
+    }
+
+    // Backed deposits: a batch may credit L2 leaves only up to what
+    // ttROLLUP_DEPOSIT2 has actually escrowed. Without this, a Deposit entry
+    // raises the pool with no L1 debit anywhere — L2 balance minted from
+    // nothing, invisible to XRPNotCreated (it ignores ltROLLUP_STATE).
+    if (totalDeposit > 0)
+    {
+        std::uint64_t const pending =
+            sle ? RollupState2::pendingDeposits(*sle) : 0;
+        if (pending < totalDeposit)
+        {
+            JLOG(ctx.j.warn())
+                << "BatchRollup2: batch credits " << totalDeposit
+                << " drops of deposits but only " << pending
+                << " are escrowed → tecINSUF_RESERVE_LINE";
+            return tecINSUF_RESERVE_LINE;
+        }
     }
 
     // THE Track 2 win: ONE Groth16 verify binds the whole batch. entriesHash
@@ -174,8 +278,13 @@ BatchRollup2::doApply()
     auto sle = view.peek(keylet::rollup_state2());
     if (!sle)
     {
+        // Bootstrap batch: this submitter becomes the escrow account that
+        // deposits pay into and withdrawals pay out of, for the life of the
+        // rollup. Anchoring it here — rather than letting each deposit name
+        // its own target — is what stops a depositor nominating an escrow
+        // they control.
         sle = RollupState2::createGenesis(
-            view, tx.getFieldVL(sfSequencerPubKey));
+            view, tx.getFieldVL(sfSequencerPubKey), tx.getAccountID(sfAccount));
         if (!sle)
             return tefINTERNAL;
     }
@@ -193,25 +302,60 @@ BatchRollup2::doApply()
     if (sle->isFieldPresent(sfBalance))
         poolDrops = sle->getFieldAmount(sfBalance).xrp().drops();
 
-    auto submitterSle =
-        view.peek(keylet::account(tx.getAccountID(sfAccount)));
-    if (!submitterSle)
+    // Withdrawals pay OUT of the same account deposits pay INTO. Using the
+    // submitter here instead would break that symmetry: preclaim pins the
+    // submitter by sequencer KEY, not by account, so a second account holding
+    // the same key would fund payouts from its own balance while the escrow
+    // kept the depositors' XRP. In the normal case (the bootstrap submitter
+    // keeps submitting) escrow and submitter are the same account.
+    auto const escrow = RollupState2::escrowAccount(*sle);
+    auto escrowSle = view.peek(
+        keylet::account(escrow != AccountID{} ? escrow
+                                              : tx.getAccountID(sfAccount)));
+    if (!escrowSle)
         return tefINTERNAL;
+
+    // Backed deposits: every drop credited to an L2 leaf must already have
+    // been paid into escrow by a ttROLLUP_DEPOSIT2 the depositor signed.
+    // preclaim checked the aggregate; consume it entry by entry here.
+    std::uint64_t pending = RollupState2::pendingDeposits(*sle);
 
     for (auto const& e : bp.entries)
     {
         if (e.txType == RequestType::Deposit)
         {
+            if (pending < e.value)
+                return tecINSUF_RESERVE_LINE;
+            pending -= e.value;
             poolDrops += static_cast<std::int64_t>(e.value);
         }
         else if (e.txType == RequestType::Withdraw)
         {
             poolDrops -= static_cast<std::int64_t>(e.value);
 
-            auto subBal = submitterSle->getFieldAmount(sfBalance);
+            // Defence in depth: preclaim already checked the batch total
+            // against the escrow balance, but this loop is what actually
+            // subtracts. Without a per-entry check a change to preclaim (or a
+            // path that reaches doApply another way) could drive the escrow
+            // below its reserve, or negative — STAmount would happily hold a
+            // negative XRP balance here.
+            auto const escrowBal =
+                escrowSle->getFieldAmount(sfBalance).xrp();
+            auto const escrowReserve = view.fees().accountReserve(
+                escrowSle->getFieldU32(sfOwnerCount));
+            if (escrowBal < escrowReserve + XRPAmount(e.value))
+            {
+                JLOG(j_.warn())
+                    << "BatchRollup2: escrow cannot fund withdrawal of "
+                    << e.value << " drops without breaching its reserve "
+                    << "→ tecINSUF_RESERVE_LINE";
+                return tecINSUF_RESERVE_LINE;
+            }
+
+            auto subBal = escrowSle->getFieldAmount(sfBalance);
             subBal -= STAmount(XRPAmount(e.value));
-            submitterSle->setFieldAmount(sfBalance, subBal);
-            view.update(submitterSle);
+            escrowSle->setFieldAmount(sfBalance, subBal);
+            view.update(escrowSle);
 
             auto destSle = view.peek(keylet::account(e.destination));
             if (!destSle)
@@ -240,6 +384,7 @@ BatchRollup2::doApply()
     if (poolDrops < 0)
         return tefINTERNAL;
     sle->setFieldAmount(sfBalance, STAmount(XRPAmount(poolDrops)));
+    RollupState2::setPendingDeposits(*sle, pending);
 
     RollupState2::setBatchCounter(*sle, bp.batchId);
     RollupState2::setRollupRoot(*sle, bp.newRoot);
