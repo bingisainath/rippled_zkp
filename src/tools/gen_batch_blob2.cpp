@@ -39,6 +39,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace ripple::zkp::rollup;
@@ -277,12 +278,24 @@ main(int argc, char** argv)
             bool allowEmpty = false;
             std::string destB58;
 
-            // TRANSFER state. A transfer touches NO L1 account: it consumes
-            // no deposit claim and pays out of no escrow, so it is the one
-            // command whose batch moves the root without moving any XRP.
-            bool isXfer = false;
-            std::uint32_t xFrom = 0, xTo = 0;
-            std::uint64_t xDrops = 0;
+            // Withdrawals normally draw the slots right after the deposits in
+            // THIS batch (u = nDeposits + i, the original PROVE convention).
+            // MIXED needs to place withdrawals and deposits at INDEPENDENT
+            // user ranges (e.g. 2 brand-new deposits at offset 8, alongside 2
+            // withdrawals from already-funded users at offset 0), so it sets
+            // this explicitly instead.
+            std::uint32_t withdrawOffset = 0;
+            bool withdrawOffsetSet = false;
+
+            // Transfer list. A transfer touches NO L1 account: it consumes no
+            // deposit claim and pays out of no escrow, so it is the one entry
+            // type that moves the root without moving any XRP. Generalised to
+            // a list (rather than one xFrom/xTo/xDrops) so MIXED can combine
+            // several transfers with deposits and withdrawals in one proof —
+            // the circuit and buildBatch already support any per-slot mix of
+            // types; only this tool's single-shot commands didn't expose it.
+            std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint64_t>>
+                transfers;
 
             // BOOTSTRAP <batchId> — a NoOp-only batch. It anchors the
             // sequencer key and the escrow account on L1 without crediting any
@@ -325,7 +338,9 @@ main(int argc, char** argv)
             // unchanged, only the root moves.
             else if (cmd == "TRANSFER")
             {
-                if (!(is >> xFrom >> xTo >> xDrops >> bid))
+                std::uint32_t tFrom = 0, tTo = 0;
+                std::uint64_t tDrops = 0;
+                if (!(is >> tFrom >> tTo >> tDrops >> bid))
                 {
                     std::cout << "ERROR=expected: TRANSFER <fromUser> "
                                  "<toUser> <drops> <batchId>\n"
@@ -333,23 +348,85 @@ main(int argc, char** argv)
                               << std::flush;
                     continue;
                 }
-                if (xFrom == xTo)
+                if (tFrom == tTo)
                 {
                     std::cout << "ERROR=self-transfer is not supported\n"
                               << "END\n"
                               << std::flush;
                     continue;
                 }
-                isXfer = true;
+                transfers.push_back({tFrom, tTo, tDrops});
                 allowEmpty = true;  // the transfer itself fills a slot
+            }
+            // MIXED <batchId> <deposits> <depositOffset> <withdrawals>
+            //       <withdrawOffset> <numTransfers> [<from> <to> <drops>]...
+            //
+            // Combines deposits, withdrawals and (multiple) transfers in ONE
+            // proof — demonstrating all three settlement patterns land as a
+            // single batch, not three separate ones. The three user ranges
+            // (deposit creators, withdrawal signers, transfer senders) MUST be
+            // pairwise disjoint: each signs at most once per batch, or the
+            // second occurrence carries a stale nonce and the proof becomes
+            // unsatisfiable (same rule PROVE already enforces for deposits
+            // vs withdrawals). Transfer RECIPIENTS have no such restriction —
+            // they never sign, so the same recipient may appear more than
+            // once, and may also be a sender/depositor/withdrawer elsewhere
+            // in the same batch.
+            else if (cmd == "MIXED")
+            {
+                std::uint32_t nTransfers = 0;
+                if (!(is >> bid >> nDeposits >> userOffset >> nWithdrawals >>
+                      withdrawOffset >> nTransfers))
+                {
+                    std::cout
+                        << "ERROR=expected: MIXED <batchId> <deposits> "
+                           "<depositOffset> <withdrawals> <withdrawOffset> "
+                           "<numTransfers> [<from> <to> <drops>]...\n"
+                        << "END\n"
+                        << std::flush;
+                    continue;
+                }
+                withdrawOffsetSet = true;
+                bool badSpec = false;
+                for (std::uint32_t k = 0; k < nTransfers; ++k)
+                {
+                    std::uint32_t tFrom = 0, tTo = 0;
+                    std::uint64_t tDrops = 0;
+                    if (!(is >> tFrom >> tTo >> tDrops))
+                    {
+                        std::cout << "ERROR=MIXED: missing transfer spec #"
+                                  << k << "\n"
+                                  << "END\n"
+                                  << std::flush;
+                        badSpec = true;
+                        break;
+                    }
+                    if (tFrom == tTo)
+                    {
+                        std::cout << "ERROR=self-transfer is not supported "
+                                     "(spec #"
+                                  << k << ")\n"
+                                  << "END\n"
+                                  << std::flush;
+                        badSpec = true;
+                        break;
+                    }
+                    transfers.push_back({tFrom, tTo, tDrops});
+                }
+                if (badSpec)
+                    continue;
+                allowEmpty = true;
             }
             else if (cmd != "PROVE" || !(is >> nDeposits >> bid))
             {
                 std::cout << "ERROR=expected: PROVE <deposits 0..8> <batchId> "
                              "[withdrawals 0..8] [destB58] | BOOTSTRAP "
                              "<batchId> | PROVE_MISATTR <batchId> | TRANSFER "
-                             "<fromUser> <toUser> <drops> <batchId> | QUOTE "
-                             "<deposits> <batchId> | BALANCES | EXIT\n"
+                             "<fromUser> <toUser> <drops> <batchId> | MIXED "
+                             "<batchId> <deposits> <depositOffset> "
+                             "<withdrawals> <withdrawOffset> <numTransfers> "
+                             "[<from> <to> <drops>]... | QUOTE <deposits> "
+                             "<batchId> | BALANCES | EXIT\n"
                           << "END\n"
                           << std::flush;
                 continue;
@@ -360,7 +437,12 @@ main(int argc, char** argv)
                 is >> destB58;       // optional; empty on absence
             }
 
-            std::uint32_t const total = nDeposits + nWithdrawals;
+            if (!withdrawOffsetSet)
+                withdrawOffset = nDeposits;  // original PROVE convention
+
+            std::uint32_t const total =
+                nDeposits + nWithdrawals +
+                static_cast<std::uint32_t>(transfers.size());
             if ((total < 1 && !allowEmpty) || total > BATCH2_SIZE)
             {
                 std::cout << "ERROR=deposits+withdrawals must be 1.."
@@ -387,44 +469,54 @@ main(int argc, char** argv)
 
             std::vector<SequencerRequest> reqs;
 
-            if (isXfer)
             {
-                BjjPoint const fromApk = EdDSA::derivePublicKey(userKey(xFrom));
-                BjjPoint const toApk = EdDSA::derivePublicKey(userKey(xTo));
-                auto const fromAv = seq.account(fromApk.x);
-                auto const toAv = seq.account(toApk.x);
-
-                if (!fromAv || fromAv->balance < xDrops)
+                bool transferError = false;
+                for (auto const& [xFrom, xTo, xDrops] : transfers)
                 {
-                    std::cout << "ERROR=user " << xFrom
-                              << " has no L2 balance (or too little) to send "
-                              << xDrops << " drops\n"
-                              << "END\n"
-                              << std::flush;
-                    continue;
-                }
-                if (!toAv)
-                {
-                    std::cout << "ERROR=user " << xTo
-                              << " has no L2 leaf — a transfer cannot create "
-                                 "one; fund it with a deposit first\n"
-                              << "END\n"
-                              << std::flush;
-                    continue;
-                }
+                    BjjPoint const fromApk =
+                        EdDSA::derivePublicKey(userKey(xFrom));
+                    BjjPoint const toApk = EdDSA::derivePublicKey(userKey(xTo));
+                    auto const fromAv = seq.account(fromApk.x);
+                    auto const toAv = seq.account(toApk.x);
 
-                SequencerRequest sr;
-                // destination stays zero: no L1 account is involved. The
-                // signed `dest` carries the RECIPIENT'S apk_x, and the
-                // circuit's is_xfer*(to_x - dest) = 0 binds the credited
-                // leaf to it.
-                sr.req = SignedRequest::make(
-                    userKey(xFrom),
-                    toApk.x,
-                    xDrops,
-                    fromAv->nonce,
-                    RequestType::Transfer);
-                reqs.push_back(sr);
+                    if (!fromAv || fromAv->balance < xDrops)
+                    {
+                        std::cout
+                            << "ERROR=user " << xFrom
+                            << " has no L2 balance (or too little) to send "
+                            << xDrops << " drops\n"
+                            << "END\n"
+                            << std::flush;
+                        transferError = true;
+                        break;
+                    }
+                    if (!toAv)
+                    {
+                        std::cout
+                            << "ERROR=user " << xTo
+                            << " has no L2 leaf — a transfer cannot create "
+                               "one; fund it with a deposit first\n"
+                            << "END\n"
+                            << std::flush;
+                        transferError = true;
+                        break;
+                    }
+
+                    SequencerRequest sr;
+                    // destination stays zero: no L1 account is involved. The
+                    // signed `dest` carries the RECIPIENT'S apk_x, and the
+                    // circuit's is_xfer*(to_x - dest) = 0 binds the credited
+                    // leaf to it.
+                    sr.req = SignedRequest::make(
+                        userKey(xFrom),
+                        toApk.x,
+                        xDrops,
+                        fromAv->nonce,
+                        RequestType::Transfer);
+                    reqs.push_back(sr);
+                }
+                if (transferError)
+                    continue;
             }
 
             for (auto const& s : depositSpecs(seq, nDeposits, userOffset))
@@ -434,9 +526,10 @@ main(int argc, char** argv)
                     s.key, s.apkX, s.drops, s.nonce, RequestType::Deposit);
                 reqs.push_back(sr);
             }
+            bool withdrawError = false;
             for (std::uint32_t i = 0; i < nWithdrawals; ++i)
             {
-                std::uint32_t const u = nDeposits + i;
+                std::uint32_t const u = withdrawOffset + i;
                 SequencerRequest sr;
                 BjjPoint apk = EdDSA::derivePublicKey(userKey(u));
                 auto av = seq.account(apk.x);
@@ -448,6 +541,7 @@ main(int argc, char** argv)
                               << "END\n"
                               << std::flush;
                     reqs.clear();
+                    withdrawError = true;
                     break;
                 }
                 // Withdraw half the balance so the leaf survives for later
@@ -462,6 +556,12 @@ main(int argc, char** argv)
                     RequestType::Withdraw);
                 reqs.push_back(sr);
             }
+            // An error already printed END above (withdrawal admission, or a
+            // bad transfer spec) must always abort here — regardless of
+            // allowEmpty, which exists for the LEGITIMATE empty case
+            // (BOOTSTRAP) only.
+            if (withdrawError)
+                continue;
             // BOOTSTRAP legitimately has no requests — buildBatch pads all 8
             // slots with NoOps. Any other command reaching here empty hit the
             // withdrawal-admission error above and already reported it.
@@ -470,7 +570,8 @@ main(int argc, char** argv)
 
             std::cerr << "[gen_batch_blob2] PROVE batch " << bid << " ("
                       << nDeposits << " deposits, " << nWithdrawals
-                      << " withdrawals) — key already resident, "
+                      << " withdrawals, " << transfers.size()
+                      << " transfers) — key already resident, "
                          "pure proving…\n";
             auto bp = seq.buildBatch(reqs, bid);
             if (!bp)
@@ -489,6 +590,7 @@ main(int argc, char** argv)
                       << "TX_COUNT=" << bp->txCount << "\n"
                       << "DEPOSITS=" << nDeposits << "\n"
                       << "WITHDRAWALS=" << nWithdrawals << "\n"
+                      << "TRANSFERS=" << transfers.size() << "\n"
                       << "END\n"
                       << std::flush;
         }
