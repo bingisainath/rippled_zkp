@@ -34,7 +34,9 @@
 
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
 
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -712,6 +714,22 @@ main(int argc, char** argv)
                           << std::flush;
                 continue;
             }
+            if (std::getenv("GEN_BATCH_BLOB2_TIMING"))
+            {
+                FieldT const prevRootF = PoseidonHash::uint256ToField(bp->prevRoot);
+                FieldT const newRootF = PoseidonHash::uint256ToField(bp->newRoot);
+                FieldT const entriesHashF = bp->computeEntriesHash();
+                auto const verifyStart = std::chrono::steady_clock::now();
+                bool const verifyOk = BatchCircuitProver::verifyBatch(
+                    prevRootF, newRootF, entriesHashF, bp->proof);
+                auto const verifyMs =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - verifyStart)
+                        .count();
+                std::cerr << "[timing] verifyBatch: " << verifyMs
+                          << " us -> " << (verifyOk ? "PASS" : "FAIL") << "\n";
+            }
+
             auto const blob = bp->serialize();
             std::cout << "BLOB=" << toHex(blob) << "\n"
                       << "PUB=" << toHex(seq.publicKey()) << "\n"
