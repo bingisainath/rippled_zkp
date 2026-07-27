@@ -1,20 +1,26 @@
 // bench_proof_aggregator — Stage A benchmark for Track 1 proof aggregation.
 //
-// Generates kBatchSize=8 REAL Track 1 Groth16 proofs (same PoseidonCircuit,
-// same RollupProver::createProof path gen_batch_blob uses for a genesis
-// deposit batch), aggregates them via ProofAggregator (SnarkPack-style
-// TIPP/GIPA — see ProofAggregator.h for the exact construction and the
-// N=8-specific simplifications), verifies the aggregate, and times every
-// step. This is the tool that produces the real N=8 latency/size numbers
-// for the dissertation — see the track1-aggregation-snarkpack memory note
-// for why full aggregation is expected to lose to today's Track 1 at N=8
-// (SnarkPack's own published crossover is ~32 proofs for verify time, ~150
-// for proof size) and why building/measuring it here is still the right
-// call (a real N=8 data point to project the curve from).
+// Generates N REAL Track 1 Groth16 proofs (same PoseidonCircuit, same
+// RollupProver::createProof path gen_batch_blob uses for a genesis deposit
+// batch), aggregates them via ProofAggregator (SnarkPack-style TIPP/GIPA —
+// see ProofAggregator.h for the exact construction and its N=8-era scoping
+// simplifications, which now apply at any N), verifies the aggregate, and
+// times every step. N is a runtime CLI argument specifically so the real
+// crossover-vs-Track-1 point can be MEASURED at N=16/32/64/128 rather than
+// projected analytically — see the track1-aggregation-snarkpack memory note
+// for why a naive O(log N) projection was not trustworthy enough to report
+// without measuring (the implementation's deliberate MIPP/KZG-opening
+// simplifications mean verify time is NOT actually O(log N) end-to-end).
 //
-// Usage: bench_proof_aggregator [--tamper]
+// Usage: bench_proof_aggregator [N] [--tamper]
+//   N          batch size, must be a power of two (default 8)
 //   --tamper   after producing a valid aggregate proof, corrupt one field
 //              and confirm verifyAggregate correctly rejects it.
+//
+// NOTE: N here is independent of Track 1's on-chain kRollupBatchSize=8
+// convention — this tool tests the aggregation SCHEME at various N,
+// simulating "what if a sequencer aggregated N off-chain proofs before
+// touching L1" rather than today's fixed 8-proof blob.
 
 #include <libxrpl/zkp/rollup/PoseidonHash.h>
 #include <libxrpl/zkp/rollup/ProofAggregator.h>
@@ -23,19 +29,17 @@
 #include <libxrpl/zkp/rollup/RollupProver.h>
 #include <libxrpl/zkp/rollup/RollupState.h>
 
-#include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace ripple;
 using namespace ripple::zkp;
 using namespace ripple::zkp::rollup;
 
 namespace {
-
-constexpr std::size_t kBatchSize = kRollupBatchSize;
 
 std::vector<FieldT>
 toFieldVec(std::vector<uint256> const& v)
@@ -56,24 +60,26 @@ leafPosBits(std::size_t pos, std::size_t depth)
     return bits;
 }
 
-std::array<RollupNote, kBatchSize>
-buildGenesisNotes()
+std::vector<RollupNote>
+buildGenesisNotes(std::size_t n)
 {
-    std::array<RollupNote, kBatchSize> notes;
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    std::vector<RollupNote> notes(n);
+    for (std::size_t i = 0; i < n; ++i)
         notes[i] = RollupNote::createRandom(0, static_cast<std::uint64_t>(i));
     return notes;
 }
 
-std::array<RollupNote, kBatchSize>
+std::vector<RollupNote>
 buildBatchNotes(
     std::uint32_t batchId,
     std::uint64_t valueBase,
-    std::array<RollupNote, kBatchSize> const& genesisNotes)
+    std::vector<RollupNote> const& genesisNotes)
 {
-    std::array<RollupNote, kBatchSize> notes;
-    std::uint64_t const seedBase = static_cast<std::uint64_t>(batchId) * 200;
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    std::size_t const n = genesisNotes.size();
+    std::vector<RollupNote> notes(n);
+    std::uint64_t const seedBase = static_cast<std::uint64_t>(batchId) *
+        static_cast<std::uint64_t>(n) * 2;
+    for (std::size_t i = 0; i < n; ++i)
     {
         notes[i] = RollupNote::createRandom(valueBase, seedBase + i);
         notes[i].ask = genesisNotes[i].ask;
@@ -93,47 +99,68 @@ timeMs(Fn&& fn)
         .count();
 }
 
+bool
+isPowerOfTwo(std::size_t n)
+{
+    return n != 0 && (n & (n - 1)) == 0;
+}
+
 }  // namespace
 
 int
 main(int argc, char** argv)
 {
+    std::size_t n = 8;
     bool tamper = false;
     for (int i = 1; i < argc; ++i)
+    {
         if (std::strcmp(argv[i], "--tamper") == 0)
             tamper = true;
+        else
+            n = static_cast<std::size_t>(std::stoul(argv[i]));
+    }
+    if (!isPowerOfTwo(n))
+    {
+        std::cerr << "N must be a power of two, got " << n << "\n";
+        return 1;
+    }
+    if (n > (std::size_t(1) << kRollupTreeDepth))
+    {
+        std::cerr << "N exceeds tree capacity (depth " << (int)kRollupTreeDepth
+                  << ")\n";
+        return 1;
+    }
 
-    std::cerr << "[bench_proof_aggregator] initialising RollupProver "
-                 "(loading keys)...\n";
+    std::cerr << "[bench_proof_aggregator] N=" << n
+              << " initialising RollupProver (loading keys)...\n";
     RollupProver::initialize();
     std::cerr << "[bench_proof_aggregator] keys loaded ("
               << RollupProver::constraintCount() << " constraints)\n";
 
-    // Build a genesis deposit batch (batchId=1, all 8 deposits) — same
-    // convention as gen_batch_blob's default path.
-    auto const genesisNotes = buildGenesisNotes();
+    // Build a genesis deposit batch of size N.
+    auto const genesisNotes = buildGenesisNotes(n);
     auto const oldNotes = genesisNotes;
     auto const newNotes = buildBatchNotes(1, 20'000'000ull, genesisNotes);
 
     RollupMerkleTree oldTree(kRollupTreeDepth);
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    for (std::size_t i = 0; i < n; ++i)
         oldTree.append(PoseidonHash::fieldToUint256(genesisNotes[i].commitment()));
     uint256 const prevRoot = oldTree.root();
 
     RollupMerkleTree newTree(kRollupTreeDepth);
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    for (std::size_t i = 0; i < n; ++i)
         newTree.append(PoseidonHash::fieldToUint256(genesisNotes[i].commitment()));
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    for (std::size_t i = 0; i < n; ++i)
         newTree.update_leaf(i, PoseidonHash::fieldToUint256(newNotes[i].commitment()));
 
     FieldT const prevRootF = PoseidonHash::uint256ToField(prevRoot);
     FieldT const newRootF = PoseidonHash::uint256ToField(newTree.root());
 
-    std::cerr << "[bench_proof_aggregator] generating " << kBatchSize
+    std::cerr << "[bench_proof_aggregator] generating " << n
               << " real Track 1 Groth16 proofs...\n";
-    std::array<RollupProofData, kBatchSize> proofs;
+    std::vector<RollupProofData> proofs(n);
     long long totalProveMs = 0;
-    for (std::size_t i = 0; i < kBatchSize; ++i)
+    for (std::size_t i = 0; i < n; ++i)
     {
         auto const leafBits = leafPosBits(i, kRollupTreeDepth);
         auto const authOld = toFieldVec(oldTree.authPath(i));
@@ -151,15 +178,15 @@ main(int argc, char** argv)
                 false);
         });
         totalProveMs += ms;
-        std::cerr << "  entry " << i << " createProof: " << ms << " ms\n";
     }
     std::cerr << "[bench_proof_aggregator] total per-user proving: "
-              << totalProveMs << " ms (sum of " << kBatchSize
-              << " independent, parallelisable proofs)\n";
+              << totalProveMs << " ms (sum of " << n
+              << " independent, parallelisable proofs; mean "
+              << (totalProveMs / static_cast<long long>(n)) << " ms/proof)\n";
 
     // ── SRS setup (one-time, not part of the per-batch latency figure) ────
     AggSRS srs;
-    long long const srsGenMs = timeMs([&] { srs = AggSRS::generate(); });
+    long long const srsGenMs = timeMs([&] { srs = AggSRS::generate(n); });
     std::cerr << "[bench_proof_aggregator] AggSRS::generate: " << srsGenMs
               << " ms (one-time, analogous to Groth16 trusted setup)\n";
 
@@ -167,13 +194,13 @@ main(int argc, char** argv)
     AggregateProof agg;
     long long const aggMs = timeMs([&] { agg = ProofAggregator::aggregate(srs, proofs); });
     std::cerr << "[bench_proof_aggregator] ProofAggregator::aggregate: "
-              << aggMs << " ms (N=" << kBatchSize << ")\n";
+              << aggMs << " ms (N=" << n << ")\n";
 
     auto const wireBytes = agg.serialize();
     std::cerr << "[bench_proof_aggregator] aggregate proof size: "
               << wireBytes.size() << " bytes (vs Track 1 today: "
-              << (kBatchSize * 192) << " B padded on-chain slots, "
-              << "~" << (kBatchSize * 137) << " B raw Groth16 proof bytes)\n";
+              << (n * 192) << " B padded on-chain slots, "
+              << "~" << (n * 137) << " B raw Groth16 proof bytes)\n";
 
     // ── Verify ──────────────────────────────────────────────────────────
     bool verifyOk = false;
@@ -181,9 +208,7 @@ main(int argc, char** argv)
         verifyOk = ProofAggregator::verifyAggregate(srs, agg, proofs);
     });
     std::cerr << "[bench_proof_aggregator] ProofAggregator::verifyAggregate: "
-              << verifyMs << " ms -> " << (verifyOk ? "PASS" : "FAIL")
-              << " (vs Track 1 today: ~" << (kBatchSize) << " x per-proof "
-              << "verify, measured separately via gen_batch_blob)\n";
+              << verifyMs << " ms -> " << (verifyOk ? "PASS" : "FAIL") << "\n";
 
     if (!verifyOk)
     {
@@ -195,7 +220,7 @@ main(int argc, char** argv)
     if (tamper)
     {
         AggregateProof bad = agg;
-        bad.Z_AB = bad.Z_AB * bad.Z_AB;  // corrupt the claimed inner pairing product
+        bad.Z_AB = bad.Z_AB * bad.Z_AB;
         bool const badOk = ProofAggregator::verifyAggregate(srs, bad, proofs);
         std::cerr << "[bench_proof_aggregator] tamper test (corrupted Z_AB): "
                   << (badOk ? "FAIL (accepted a bad proof!)" : "PASS (rejected)")
@@ -203,7 +228,7 @@ main(int argc, char** argv)
         if (badOk)
             return 1;
 
-        std::array<RollupProofData, kBatchSize> badProofs = proofs;
+        std::vector<RollupProofData> badProofs = proofs;
         badProofs[0].value_pub = badProofs[0].value_pub + FieldT::one();
         bool const badPub = ProofAggregator::verifyAggregate(srs, agg, badProofs);
         std::cerr << "[bench_proof_aggregator] tamper test (corrupted public "
@@ -214,12 +239,12 @@ main(int argc, char** argv)
             return 1;
     }
 
-    std::cerr << "[bench_proof_aggregator] SUMMARY (N=" << kBatchSize << "):\n"
-              << "  per-user prove (sum, parallelisable): " << totalProveMs
-              << " ms\n"
-              << "  aggregate (sequencer-side, one-time SRS excluded): "
-              << aggMs << " ms\n"
-              << "  aggregate verify (L1-side): " << verifyMs << " ms\n"
-              << "  aggregate proof bytes: " << wireBytes.size() << " B\n";
+    // Machine-parseable summary line for scripted sweeps across N.
+    std::cout << "RESULT n=" << n << " prove_sum_ms=" << totalProveMs
+              << " prove_mean_ms=" << (totalProveMs / static_cast<long long>(n))
+              << " aggregate_ms=" << aggMs << " verify_ms=" << verifyMs
+              << " proof_bytes=" << wireBytes.size()
+              << " track1_raw_bytes=" << (n * 137)
+              << " track1_padded_bytes=" << (n * 192) << "\n";
     return 0;
 }

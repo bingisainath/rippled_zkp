@@ -53,41 +53,49 @@ ipp(std::vector<AggG1> const& A, std::vector<AggG2> const& B)
 }
 
 AggG1
-multiExpG1(
-    std::array<AggG1, kAggN> const& base,
-    std::vector<AggFr> const& coeffs)
+multiExpG1(std::vector<AggG1> const& base, std::vector<AggFr> const& coeffs)
 {
     AggG1 acc = AggG1::zero();
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < base.size(); ++i)
         acc = acc + coeffs[i] * base[i];
     return acc;
 }
 
 AggG2
-multiExpG2(
-    std::array<AggG2, kAggN> const& base,
-    std::vector<AggFr> const& coeffs)
+multiExpG2(std::vector<AggG2> const& base, std::vector<AggFr> const& coeffs)
 {
     AggG2 acc = AggG2::zero();
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < base.size(); ++i)
         acc = acc + coeffs[i] * base[i];
     return acc;
 }
 
-// Dense coefficients (length kAggN) of PROD_{j=0}^{rounds-1} (1 + factor[j] *
+// n must be a power of two; returns log2(n).
+std::size_t
+log2Exact(std::size_t n)
+{
+    if (n == 0 || (n & (n - 1)) != 0)
+        throw std::runtime_error("ProofAggregator: N must be a power of two");
+    std::size_t rounds = 0;
+    while ((std::size_t(1) << rounds) < n)
+        ++rounds;
+    return rounds;
+}
+
+// Dense coefficients (length n) of PROD_{j=0}^{rounds-1} (1 + factor[j] *
 // X^(2^j)), built by iterative in-place polynomial multiplication by each
 // binomial factor (safe done high-to-low since poly[k-shift] hasn't been
 // touched yet in the current pass).
 std::vector<AggFr>
-expandBinomialProduct(std::vector<AggFr> const& factors)
+expandBinomialProduct(std::vector<AggFr> const& factors, std::size_t n)
 {
-    std::vector<AggFr> poly(kAggN, AggFr::zero());
+    std::vector<AggFr> poly(n, AggFr::zero());
     poly[0] = AggFr::one();
     for (std::size_t j = 0; j < factors.size(); ++j)
     {
         std::size_t const shift = std::size_t(1) << j;
         AggFr const coeff = factors[j];
-        for (std::size_t k = kAggN; k-- > shift;)
+        for (std::size_t k = n; k-- > shift;)
             poly[k] = poly[k] + coeff * poly[k - shift];
     }
     return poly;
@@ -100,25 +108,32 @@ expandBinomialProduct(std::vector<AggFr> const& factors)
 // ---------------------------------------------------------------------------
 
 AggSRS
-AggSRS::generate()
+AggSRS::generate(std::size_t n)
 {
+    log2Exact(n);  // validates n is a power of two; throws otherwise
+
     AggFr const a = AggFr::random_element();
     AggFr const b = AggFr::random_element();
 
     AggSRS srs;
+    srs.v1.resize(n);
+    srs.v2.resize(n);
+    srs.w1.resize(n);
+    srs.w2.resize(n);
+
     AggFr aPow = AggFr::one();
     AggFr bPow = AggFr::one();
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < n; ++i)
     {
         srs.v1[i] = aPow * AggG2::one();
         srs.v2[i] = bPow * AggG2::one();
         aPow = aPow * a;
         bPow = bPow * b;
     }
-    // aPow == a^kAggN, bPow == b^kAggN at this point.
+    // aPow == a^n, bPow == b^n at this point.
     AggFr aShift = aPow;
     AggFr bShift = bPow;
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < n; ++i)
     {
         srs.w1[i] = aShift * AggG1::one();
         srs.w2[i] = bShift * AggG1::one();
@@ -134,11 +149,7 @@ AggSRS::save(std::string const& path) const
     std::ofstream f(path, std::ios::binary);
     if (!f.good())
         throw std::runtime_error("AggSRS::save: cannot open " + path);
-    std::vector<AggG2> v1v(v1.begin(), v1.end());
-    std::vector<AggG2> v2v(v2.begin(), v2.end());
-    std::vector<AggG1> w1v(w1.begin(), w1.end());
-    std::vector<AggG1> w2v(w2.begin(), w2.end());
-    f << v1v << v2v << w1v << w2v;
+    f << v1 << v2 << w1 << w2;
 }
 
 AggSRS
@@ -147,18 +158,12 @@ AggSRS::load(std::string const& path)
     std::ifstream f(path, std::ios::binary);
     if (!f.good())
         throw std::runtime_error("AggSRS::load: cannot open " + path);
-    std::vector<AggG2> v1v, v2v;
-    std::vector<AggG1> w1v, w2v;
-    f >> v1v >> v2v >> w1v >> w2v;
-    if (v1v.size() != kAggN || v2v.size() != kAggN || w1v.size() != kAggN ||
-        w2v.size() != kAggN)
-        throw std::runtime_error("AggSRS::load: size mismatch in " + path);
-
     AggSRS srs;
-    std::copy(v1v.begin(), v1v.end(), srs.v1.begin());
-    std::copy(v2v.begin(), v2v.end(), srs.v2.begin());
-    std::copy(w1v.begin(), w1v.end(), srs.w1.begin());
-    std::copy(w2v.begin(), w2v.end(), srs.w2.begin());
+    f >> srs.v1 >> srs.v2 >> srs.w1 >> srs.w2;
+    if (srs.v1.size() != srs.v2.size() || srs.v1.size() != srs.w1.size() ||
+        srs.v1.size() != srs.w2.size())
+        throw std::runtime_error("AggSRS::load: size mismatch in " + path);
+    log2Exact(srs.v1.size());
     return srs;
 }
 
@@ -170,6 +175,8 @@ std::vector<unsigned char>
 AggregateProof::serialize() const
 {
     std::stringstream ss(std::ios::binary | std::ios::out);
+    std::uint64_t const nRounds = rounds.size();
+    ss.write(reinterpret_cast<char const*>(&nRounds), sizeof(nRounds));
     ss << T_AB << U_AB << Z_AB;
     for (auto const& r : rounds)
         ss << r.zL << r.zR << r.tL << r.uL << r.tR << r.uR;
@@ -185,7 +192,10 @@ AggregateProof::deserialize(std::vector<unsigned char> const& bytes)
         std::string(bytes.begin(), bytes.end()),
         std::ios::binary | std::ios::in);
     AggregateProof p;
+    std::uint64_t nRounds = 0;
+    ss.read(reinterpret_cast<char*>(&nRounds), sizeof(nRounds));
     ss >> p.T_AB >> p.U_AB >> p.Z_AB;
+    p.rounds.resize(nRounds);
     for (auto& r : p.rounds)
         ss >> r.zL >> r.zR >> r.tL >> r.uL >> r.tR >> r.uR;
     ss >> p.finalA >> p.finalB;
@@ -217,21 +227,26 @@ ProofAggregator::hashToFr(std::vector<unsigned char> const& transcript)
 AggregateProof
 ProofAggregator::aggregate(
     AggSRS const& srs,
-    std::array<RollupProofData, kAggN> const& proofs)
+    std::vector<RollupProofData> const& proofs)
 {
-    std::vector<AggG1> A(kAggN);
-    std::vector<AggG2> B(kAggN);
-    for (std::size_t i = 0; i < kAggN; ++i)
+    std::size_t const n = proofs.size();
+    std::size_t const rounds_n = log2Exact(n);
+    if (srs.n() != n)
+        throw std::runtime_error("ProofAggregator::aggregate: SRS size != N");
+
+    std::vector<AggG1> A(n);
+    std::vector<AggG2> B(n);
+    for (std::size_t i = 0; i < n; ++i)
     {
         auto proof = RollupProver::deserializeProofPublic(proofs[i].proof_bytes);
         A[i] = proof.g_A;
         B[i] = proof.g_B;
     }
 
-    std::vector<AggG2> v1(srs.v1.begin(), srs.v1.end());
-    std::vector<AggG2> v2(srs.v2.begin(), srs.v2.end());
-    std::vector<AggG1> w1(srs.w1.begin(), srs.w1.end());
-    std::vector<AggG1> w2(srs.w2.begin(), srs.w2.end());
+    std::vector<AggG2> const& v1 = srs.v1;
+    std::vector<AggG2> const& v2 = srs.v2;
+    std::vector<AggG1> const& w1 = srs.w1;
+    std::vector<AggG1> const& w2 = srs.w2;
 
     // Initial commitment on the ORIGINAL (unscaled) A, B — bootstraps r via
     // Fiat-Shamir before any rescaling. See the memory note: this value is
@@ -250,16 +265,16 @@ ProofAggregator::aggregate(
     appendSerialized(x0Bytes, hcom);
     AggFr const r = hashToFr(x0Bytes);
 
-    std::vector<AggFr> rPow(kAggN);
+    std::vector<AggFr> rPow(n);
     rPow[0] = AggFr::one();
-    for (std::size_t i = 1; i < kAggN; ++i)
+    for (std::size_t i = 1; i < n; ++i)
         rPow[i] = rPow[i - 1] * r;
 
     // Rescale B -> B' = B^r and w1,w2 -> w'1,w'2 = w1^(1/r), w2^(1/r),
     // component-wise, once.
-    std::vector<AggG2> Bp(kAggN);
-    std::vector<AggG1> w1p(kAggN), w2p(kAggN);
-    for (std::size_t i = 0; i < kAggN; ++i)
+    std::vector<AggG2> Bp(n);
+    std::vector<AggG1> w1p(n), w2p(n);
+    for (std::size_t i = 0; i < n; ++i)
     {
         Bp[i] = rPow[i] * B[i];
         AggFr const rInv = rPow[i].inverse();
@@ -269,15 +284,15 @@ ProofAggregator::aggregate(
 
     AggGT const Z_AB = ipp(A, Bp);
 
-    std::array<TippRound, kAggRounds> rounds;
+    std::vector<TippRound> rounds(rounds_n);
     std::vector<AggG1> curA = A;
     std::vector<AggG2> curB = Bp;
     std::vector<AggG2> curV1 = v1, curV2 = v2;
     std::vector<AggG1> curW1 = w1p, curW2 = w2p;
     AggFr xPrev = hcom;
 
-    std::size_t m = kAggN;
-    for (std::size_t round = 0; round < kAggRounds; ++round)
+    std::size_t m = n;
+    for (std::size_t round = 0; round < rounds_n; ++round)
     {
         std::size_t const mp = m / 2;
 
@@ -344,7 +359,7 @@ ProofAggregator::aggregate(
     out.T_AB = T_AB;
     out.U_AB = U_AB;
     out.Z_AB = Z_AB;
-    out.rounds = rounds;
+    out.rounds = std::move(rounds);
     out.finalA = curA[0];
     out.finalB = curB[0];
     return out;
@@ -354,8 +369,16 @@ bool
 ProofAggregator::verifyAggregate(
     AggSRS const& srs,
     AggregateProof const& agg,
-    std::array<RollupProofData, kAggN> const& proofs)
+    std::vector<RollupProofData> const& proofs)
 {
+    std::size_t const n = proofs.size();
+    std::size_t const rounds_n = log2Exact(n);
+    if (srs.n() != n)
+        throw std::runtime_error(
+            "ProofAggregator::verifyAggregate: SRS size != N");
+    if (agg.rounds.size() != rounds_n)
+        return false;
+
     auto const& vk = RollupProver::verificationKey();
 
     // Reconstruct r exactly as aggregate() derived it.
@@ -368,16 +391,16 @@ ProofAggregator::verifyAggregate(
     appendSerialized(x0Bytes, hcom);
     AggFr const r = hashToFr(x0Bytes);
 
-    std::vector<AggFr> rPow(kAggN);
+    std::vector<AggFr> rPow(n);
     rPow[0] = AggFr::one();
-    for (std::size_t i = 1; i < kAggN; ++i)
+    for (std::size_t i = 1; i < n; ++i)
         rPow[i] = rPow[i - 1] * r;
 
     // Reconstruct round challenges and fold (Z,T,U) alongside them.
     AggGT Zc = agg.Z_AB, Tc = agg.T_AB, Uc = agg.U_AB;
     AggFr xPrev = hcom;
-    std::vector<AggFr> xs(kAggRounds);
-    for (std::size_t round = 0; round < kAggRounds; ++round)
+    std::vector<AggFr> xs(rounds_n);
+    for (std::size_t round = 0; round < rounds_n; ++round)
     {
         auto const& rd = agg.rounds[round];
         std::vector<unsigned char> xb;
@@ -409,20 +432,20 @@ ProofAggregator::verifyAggregate(
     // X^(2^j)); f_w uses x_(l-j) (not inverted) times r^(-2^j), and its
     // coefficients pair directly against w1/w2 since those SRS elements
     // already represent the X^(n+i) monomials.
-    std::vector<AggFr> fvFactors(kAggRounds);
-    for (std::size_t j = 0; j < kAggRounds; ++j)
-        fvFactors[j] = xs[kAggRounds - 1 - j].inverse();
-    std::vector<AggFr> const fvCoeffs = expandBinomialProduct(fvFactors);
+    std::vector<AggFr> fvFactors(rounds_n);
+    for (std::size_t j = 0; j < rounds_n; ++j)
+        fvFactors[j] = xs[rounds_n - 1 - j].inverse();
+    std::vector<AggFr> const fvCoeffs = expandBinomialProduct(fvFactors, n);
 
-    std::vector<AggFr> fwFactors(kAggRounds);
+    std::vector<AggFr> fwFactors(rounds_n);
     AggFr const rInv = r.inverse();
     AggFr rInvPow = rInv;
-    for (std::size_t j = 0; j < kAggRounds; ++j)
+    for (std::size_t j = 0; j < rounds_n; ++j)
     {
-        fwFactors[j] = xs[kAggRounds - 1 - j] * rInvPow;
+        fwFactors[j] = xs[rounds_n - 1 - j] * rInvPow;
         rInvPow = rInvPow * rInvPow;
     }
-    std::vector<AggFr> const fwCoeffs = expandBinomialProduct(fwFactors);
+    std::vector<AggFr> const fwCoeffs = expandBinomialProduct(fwFactors, n);
 
     AggG2 const v1f = multiExpG2(srs.v1, fvCoeffs);
     AggG2 const v2f = multiExpG2(srs.v2, fvCoeffs);
@@ -437,12 +460,11 @@ ProofAggregator::verifyAggregate(
         return false;
 
     // Direct (non-GIPA) aggregation of C_i and the per-entry public-input
-    // accumulation vk_x_i — justified at N=8, see header doc. Both are O(N)
-    // multi-scalar sums a verifier can just compute rather than compressing
-    // via a second (MIPP) GIPA recursion.
+    // accumulation vk_x_i — see header doc for why this stays O(N) rather
+    // than a second (MIPP) GIPA recursion.
     AggG1 Z_C = AggG1::zero();
     AggG1 vkXAgg = AggG1::zero();
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < n; ++i)
     {
         auto proof = RollupProver::deserializeProofPublic(proofs[i].proof_bytes);
         Z_C = Z_C + rPow[i] * proof.g_C;
@@ -461,7 +483,7 @@ ProofAggregator::verifyAggregate(
     }
 
     AggFr sumR = AggFr::zero();
-    for (std::size_t i = 0; i < kAggN; ++i)
+    for (std::size_t i = 0; i < n; ++i)
         sumR = sumR + rPow[i];
 
     AggGT const rhs = (vk.alpha_g1_beta_g2 ^ sumR.as_bigint()) *
