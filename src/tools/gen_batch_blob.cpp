@@ -56,7 +56,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -468,11 +470,18 @@ main(int argc, char** argv)
         {
             std::cerr << "  entry " << i << "... " << std::flush;
         }
+        auto const proveStart = std::chrono::steady_clock::now();
         RollupProofData pd = RollupProver::createProof(
             oldNotes[i], newNotes[i],
             leafBits, authOld, authNew,
             prevRootF, newRootF,
             isWithdraw);
+        auto const proveMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - proveStart)
+                                  .count();
+        if (std::getenv("GEN_BATCH_BLOB_TIMING"))
+            std::cerr << "[timing] entry " << i << " createProof: " << proveMs
+                       << " ms\n";
 
         if (pd.proof_bytes.size() > kEntryProofSlot)
         {
@@ -498,7 +507,15 @@ main(int argc, char** argv)
         std::vector<unsigned char> entryProofVec(
             bp.proof.data() + i * kEntryProofSlot,
             bp.proof.data() + i * kEntryProofSlot + kEntryProofSlot);
-        if (!RollupProver::verifyEntry(bp, i, entryProofVec))
+        auto const verifyStart = std::chrono::steady_clock::now();
+        bool const verifyOk = RollupProver::verifyEntry(bp, i, entryProofVec);
+        auto const verifyMs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - verifyStart)
+                                   .count();
+        if (std::getenv("GEN_BATCH_BLOB_TIMING"))
+            std::cerr << "[timing] entry " << i << " verifyEntry: " << verifyMs
+                       << " us\n";
+        if (!verifyOk)
         {
             std::cerr << "FATAL: local verify FAILED for entry " << i << "\n";
             return 1;
