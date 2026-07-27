@@ -146,6 +146,21 @@ public:
     static std::size_t
     constraintCount();
 
+    // Read-only access to the loaded verification key — needed by
+    // ProofAggregator, which verifies an aggregate proof against the same
+    // shared Groth16 verification key Track 1 already uses, without
+    // depending on RollupProver's internal proving state. Throws if not
+    // yet initialised (call initialize() or initializeVerifierOnly() first).
+    static libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve> const&
+    verificationKey();
+
+    // Public wrapper on deserializeProof — ProofAggregator needs to pull the
+    // raw (A, B, C) Groth16 elements out of each RollupProofData's
+    // proof_bytes to build the aggregate; the private member below stays
+    // private to keep serialization details internal to normal Track 1 use.
+    static libsnark::r1cs_gg_ppzksnark_proof<DefaultCurve>
+    deserializeProofPublic(std::vector<unsigned char> const& bytes);
+
 private:
     static std::shared_ptr<libsnark::r1cs_gg_ppzksnark_proving_key<DefaultCurve>>
         proving_key_;

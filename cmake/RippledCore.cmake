@@ -263,4 +263,21 @@ if(xrpld)
   # alone (same rationale would apply to gen_batch_blob).
   target_link_options(gen_batch_blob2 PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
+
+  # ── bench_proof_aggregator — Track 1 SnarkPack-style aggregation bench ────
+  add_executable(bench_proof_aggregator
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/bench_proof_aggregator.cpp
+  )
+  target_include_directories(bench_proof_aggregator
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(bench_proof_aggregator
+    Ripple::boost
+    Ripple::opts
+    Ripple::libs
+    xrpl.libxrpl
+  )
+  target_link_options(bench_proof_aggregator PRIVATE
+    -Wl,--unresolved-symbols=ignore-all)
 endif()

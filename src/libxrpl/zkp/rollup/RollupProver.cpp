@@ -370,6 +370,22 @@ RollupProver::constraintCount()
     return circuit_->constraintCount();
 }
 
+libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve> const&
+RollupProver::verificationKey()
+{
+    if (!verification_key_)
+        throw std::runtime_error(
+            "RollupProver::verificationKey: not initialised — call "
+            "initialize() or initializeVerifierOnly() first");
+    return *verification_key_;
+}
+
+libsnark::r1cs_gg_ppzksnark_proof<DefaultCurve>
+RollupProver::deserializeProofPublic(std::vector<unsigned char> const& bytes)
+{
+    return deserializeProof(bytes);
+}
+
 }  // namespace rollup
 }  // namespace zkp
 }  // namespace ripple
