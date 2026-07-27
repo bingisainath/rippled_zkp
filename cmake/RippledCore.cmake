@@ -280,4 +280,21 @@ if(xrpld)
   )
   target_link_options(bench_proof_aggregator PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
+
+  # ── bench_track2_scale — Track 2 batch circuit at N != 8 ──────────────────
+  add_executable(bench_track2_scale
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/bench_track2_scale.cpp
+  )
+  target_include_directories(bench_track2_scale
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(bench_track2_scale
+    Ripple::boost
+    Ripple::opts
+    Ripple::libs
+    xrpl.libxrpl
+  )
+  target_link_options(bench_track2_scale PRIVATE
+    -Wl,--unresolved-symbols=ignore-all)
 endif()
