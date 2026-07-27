@@ -38,6 +38,36 @@ BatchCircuitProver::defaultKeyPath()
 }
 
 void
+BatchCircuitProver::initializeVerifierOnly(std::string const& key_path)
+{
+    if (initialised_)
+        return;
+
+    DefaultCurve::init_public_params();
+    PoseidonHash::initialize();
+    BabyJubjub::initialize();
+
+    std::ifstream vk_file(key_path + "_vk", std::ios::binary);
+    if (!vk_file.good())
+        throw std::runtime_error(
+            "BatchCircuitProver::initializeVerifierOnly: no verification "
+            "key at " +
+            key_path +
+            "_vk (run the prover tool once first to generate keys)");
+
+    verification_key_ = std::make_shared<
+        libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve>>();
+    vk_file >> *verification_key_;
+
+    std::cout << "[BatchCircuitProver] Loaded verification key ONLY from "
+              << key_path
+              << " (this node verifies batches; it never builds them, so "
+                 "it never needs the large proving key)"
+              << std::endl;
+    initialised_ = true;
+}
+
+void
 BatchCircuitProver::initialize(
     std::string const& key_path,
     std::size_t batch_size,

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 namespace ripple {
 namespace zkp {
@@ -27,6 +28,35 @@ RollupProver::defaultKeyPath()
 {
     static std::string const p = "/tmp/rippled_rollup_keys";
     return p;
+}
+
+void
+RollupProver::initializeVerifierOnly(std::string const& key_path)
+{
+    if (initialised_)
+        return;
+
+    DefaultCurve::init_public_params();
+    PoseidonHash::initialize();
+    BabyJubjub::initialize();
+
+    std::ifstream vk_file(key_path + "_vk", std::ios::binary);
+    if (!vk_file.good())
+        throw std::runtime_error(
+            "RollupProver::initializeVerifierOnly: no verification key at " +
+            key_path +
+            "_vk (run the prover tool once first to generate keys)");
+
+    verification_key_ = std::make_shared<
+        libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve>>();
+    vk_file >> *verification_key_;
+
+    std::cout << "[RollupProver] Loaded verification key ONLY from "
+              << key_path
+              << " (this node verifies batches; it never builds them, so "
+                 "it never needs the large proving key)"
+              << std::endl;
+    initialised_ = true;
 }
 
 void

@@ -221,6 +221,23 @@ main(int argc, char** argv)
             if (cmd == "EXIT")
                 break;
 
+            // RESET — reinitialise the sequencer's account tree back to
+            // genesis (empty tree, batchId chain restarts) WITHOUT touching
+            // the Groth16 keys at all. The ~65-80s cost measured on --serve
+            // startup is entirely BatchCircuitProver::initialize() above —
+            // a one-time, process-static key load. RollupSequencer2 itself
+            // is a plain value type (a tree + a small account map) that
+            // never touches the loaded keys, so reconstructing it is cheap.
+            // This lets a caller reuse ONE resident process (and its
+            // already-loaded key) across many demo "reset the world" cycles
+            // instead of paying the key-load cost every single time.
+            if (cmd == "RESET")
+            {
+                seq = RollupSequencer2(kDepth);
+                std::cout << "RESET_OK\n" << "END\n" << std::flush;
+                continue;
+            }
+
             // QUOTE <deposits 0..8> <batchId>
             //
             // Report what a subsequent PROVE will credit, WITHOUT proving.
@@ -297,6 +314,13 @@ main(int argc, char** argv)
             std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint64_t>>
                 transfers;
 
+            // Explicit per-withdrawal (userIndex, destination) list, used only
+            // by WITHDRAWALS below. Every other command leaves this empty and
+            // falls through to the legacy contiguous-range + single shared
+            // `dest` withdrawal loop unchanged — this is purely additive.
+            std::vector<std::pair<std::uint32_t, ripple::AccountID>>
+                withdrawalSpecs;
+
             // BOOTSTRAP <batchId> — a NoOp-only batch. It anchors the
             // sequencer key and the escrow account on L1 without crediting any
             // L2 balance, which backed deposits require before the first
@@ -358,8 +382,64 @@ main(int argc, char** argv)
                 transfers.push_back({tFrom, tTo, tDrops});
                 allowEmpty = true;  // the transfer itself fills a slot
             }
+            // WITHDRAWALS <batchId> <count> <userIdx> <destB58> [<userIdx>
+            //             <destB58> ...]
+            //
+            // N withdrawals, each with its OWN payout destination, in ONE
+            // proof. PROVE and MIXED both hardcode a single shared `dest` for
+            // every withdrawal in the call — not a circuit limitation, just
+            // how their request-building loop is written (SequencerRequest::
+            // destination is already a per-entry field). This command is the
+            // one that actually uses that per-entry field: it lets, e.g., 8
+            // different users each cash out to their own L1 wallet as a
+            // single batch instead of 8 sequential ones.
+            else if (cmd == "WITHDRAWALS")
+            {
+                std::uint32_t count = 0;
+                if (!(is >> bid >> count) || count == 0 || count > BATCH2_SIZE)
+                {
+                    std::cout << "ERROR=expected: WITHDRAWALS <batchId> "
+                                 "<count> <userIdx> <destB58> "
+                                 "[<userIdx> <destB58> ...]\n"
+                              << "END\n"
+                              << std::flush;
+                    continue;
+                }
+                bool badSpec = false;
+                for (std::uint32_t k = 0; k < count; ++k)
+                {
+                    std::uint32_t idx = 0;
+                    std::string db58;
+                    if (!(is >> idx >> db58))
+                    {
+                        std::cout << "ERROR=WITHDRAWALS: missing spec #" << k
+                                  << "\n"
+                                  << "END\n"
+                                  << std::flush;
+                        badSpec = true;
+                        break;
+                    }
+                    auto parsed = ripple::parseBase58<ripple::AccountID>(db58);
+                    if (!parsed)
+                    {
+                        std::cout << "ERROR=WITHDRAWALS: bad destination "
+                                     "account: "
+                                  << db58 << "\n"
+                                  << "END\n"
+                                  << std::flush;
+                        badSpec = true;
+                        break;
+                    }
+                    withdrawalSpecs.push_back({idx, *parsed});
+                }
+                if (badSpec)
+                    continue;
+                nWithdrawals =
+                    count;  // so the total-size check below sees it
+            }
             // MIXED <batchId> <deposits> <depositOffset> <withdrawals>
             //       <withdrawOffset> <numTransfers> [<from> <to> <drops>]...
+            //       [<destB58>]
             //
             // Combines deposits, withdrawals and (multiple) transfers in ONE
             // proof — demonstrating all three settlement patterns land as a
@@ -372,6 +452,17 @@ main(int argc, char** argv)
             // they never sign, so the same recipient may appear more than
             // once, and may also be a sender/depositor/withdrawer elsewhere
             // in the same batch.
+            //
+            // The trailing destB58 is OPTIONAL and, unlike plain PROVE, is
+            // read AFTER the transfer specs (there's no fixed-arity way to
+            // place it earlier once numTransfers is variable-length). Omit it
+            // and withdrawals in this batch pay the genesis account, exactly
+            // today's behaviour — this keeps every existing caller working
+            // unchanged. Supply it to redirect ALL of this batch's
+            // withdrawals (there is still only one destination per batch,
+            // same limit plain PROVE has) to a specific L1 account — e.g. the
+            // withdrawing user's own wallet, which the caller (not the
+            // circuit) is responsible for matching to withdrawOffset.
             else if (cmd == "MIXED")
             {
                 std::uint32_t nTransfers = 0;
@@ -381,7 +472,8 @@ main(int argc, char** argv)
                     std::cout
                         << "ERROR=expected: MIXED <batchId> <deposits> "
                            "<depositOffset> <withdrawals> <withdrawOffset> "
-                           "<numTransfers> [<from> <to> <drops>]...\n"
+                           "<numTransfers> [<from> <to> <drops>]... "
+                           "[<destB58>]\n"
                         << "END\n"
                         << std::flush;
                     continue;
@@ -415,6 +507,7 @@ main(int argc, char** argv)
                 }
                 if (badSpec)
                     continue;
+                is >> destB58;  // optional; empty (→ genesis) if absent
                 allowEmpty = true;
             }
             else if (cmd != "PROVE" || !(is >> nDeposits >> bid))
@@ -422,11 +515,13 @@ main(int argc, char** argv)
                 std::cout << "ERROR=expected: PROVE <deposits 0..8> <batchId> "
                              "[withdrawals 0..8] [destB58] | BOOTSTRAP "
                              "<batchId> | PROVE_MISATTR <batchId> | TRANSFER "
-                             "<fromUser> <toUser> <drops> <batchId> | MIXED "
+                             "<fromUser> <toUser> <drops> <batchId> | "
+                             "WITHDRAWALS <batchId> <count> <userIdx> "
+                             "<destB58> [...] | MIXED "
                              "<batchId> <deposits> <depositOffset> "
                              "<withdrawals> <withdrawOffset> <numTransfers> "
                              "[<from> <to> <drops>]... | QUOTE <deposits> "
-                             "<batchId> | BALANCES | EXIT\n"
+                             "<batchId> | BALANCES | RESET | EXIT\n"
                           << "END\n"
                           << std::flush;
                 continue;
@@ -527,34 +622,70 @@ main(int argc, char** argv)
                 reqs.push_back(sr);
             }
             bool withdrawError = false;
-            for (std::uint32_t i = 0; i < nWithdrawals; ++i)
+            if (!withdrawalSpecs.empty())
             {
-                std::uint32_t const u = withdrawOffset + i;
-                SequencerRequest sr;
-                BjjPoint apk = EdDSA::derivePublicKey(userKey(u));
-                auto av = seq.account(apk.x);
-                if (!av || av->balance == 0)
+                // WITHDRAWALS path: each entry carries its OWN destination —
+                // this is the only difference from the legacy loop below.
+                for (auto const& [u, dst] : withdrawalSpecs)
                 {
-                    std::cout << "ERROR=user " << u
-                              << " has no L2 balance to withdraw — fund it in "
-                                 "an earlier batch first\n"
-                              << "END\n"
-                              << std::flush;
-                    reqs.clear();
-                    withdrawError = true;
-                    break;
+                    SequencerRequest sr;
+                    BjjPoint apk = EdDSA::derivePublicKey(userKey(u));
+                    auto av = seq.account(apk.x);
+                    if (!av || av->balance == 0)
+                    {
+                        std::cout
+                            << "ERROR=user " << u
+                            << " has no L2 balance to withdraw — fund it in "
+                               "an earlier batch first\n"
+                            << "END\n"
+                            << std::flush;
+                        reqs.clear();
+                        withdrawError = true;
+                        break;
+                    }
+                    sr.destination = dst;
+                    sr.req = SignedRequest::make(
+                        userKey(u),
+                        accountIdToField(dst),
+                        av->balance / 2,
+                        av->nonce,
+                        RequestType::Withdraw);
+                    reqs.push_back(sr);
                 }
-                // Withdraw half the balance so the leaf survives for later
-                // batches; the signed `dest` must encode the L1 payout target
-                // (AccountLeaf.h canonical encoding) or preflight rejects it.
-                sr.destination = dest;
-                sr.req = SignedRequest::make(
-                    userKey(u),
-                    accountIdToField(dest),
-                    av->balance / 2,
-                    av->nonce,
-                    RequestType::Withdraw);
-                reqs.push_back(sr);
+            }
+            else
+            {
+                for (std::uint32_t i = 0; i < nWithdrawals; ++i)
+                {
+                    std::uint32_t const u = withdrawOffset + i;
+                    SequencerRequest sr;
+                    BjjPoint apk = EdDSA::derivePublicKey(userKey(u));
+                    auto av = seq.account(apk.x);
+                    if (!av || av->balance == 0)
+                    {
+                        std::cout
+                            << "ERROR=user " << u
+                            << " has no L2 balance to withdraw — fund it in "
+                               "an earlier batch first\n"
+                            << "END\n"
+                            << std::flush;
+                        reqs.clear();
+                        withdrawError = true;
+                        break;
+                    }
+                    // Withdraw half the balance so the leaf survives for
+                    // later batches; the signed `dest` must encode the L1
+                    // payout target (AccountLeaf.h canonical encoding) or
+                    // preflight rejects it.
+                    sr.destination = dest;
+                    sr.req = SignedRequest::make(
+                        userKey(u),
+                        accountIdToField(dest),
+                        av->balance / 2,
+                        av->nonce,
+                        RequestType::Withdraw);
+                    reqs.push_back(sr);
+                }
             }
             // An error already printed END above (withdrawal admission, or a
             // bad transfer spec) must always abort here — regardless of

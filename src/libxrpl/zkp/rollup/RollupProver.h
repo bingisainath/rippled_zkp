@@ -65,6 +65,16 @@ public:
     initialize(std::string const& key_path = defaultKeyPath(),
                std::size_t tree_depth = 16);  // Lever #2: was 32
 
+    // Load ONLY the verification key — for a node that verifies batches but
+    // never builds them (i.e. rippled itself; proving happens in a separate
+    // sequencer/tool process). The proving key is the large one (hundreds
+    // of thousands of curve points; ~65-70s to deserialise); verifyProof()
+    // never touches it, only verification_key_. Skips circuit construction
+    // too (also unneeded for verification). Throws if no cached vk exists —
+    // the prover process must have generated keys at least once already.
+    static void
+    initializeVerifierOnly(std::string const& key_path = defaultKeyPath());
+
     // Generate fresh keys for a Poseidon circuit at the given depth and save
     // them. Throws on failure.
     static void
