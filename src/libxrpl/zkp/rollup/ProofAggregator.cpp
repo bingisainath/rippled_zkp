@@ -9,7 +9,10 @@
 #include <gmp.h>
 #include <openssl/sha.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -51,6 +54,53 @@ ipp(std::vector<AggG1> const& A, std::vector<AggG2> const& B)
         acc = acc * Curve::reduced_pairing(A[i], B[i]);
     return acc;
 }
+
+// Accumulates PROD e(P_i, Q_i)^(rho_i) as ONE unreduced Miller-loop product
+// across many terms drawn from several logically-separate pairing
+// equations, deferring the expensive final exponentiation to a single call
+// at the very end — "batch pairing checks, pay for one FinalExponentiation
+// instead of N", the specific optimization identified as missing from the
+// original implementation (see ProofAggregator.h's PERFORMANCE NOTE).
+//
+// Soundness: the rho_i are fresh, LOCAL, non-Fiat-Shamir randomness (sampled
+// after every value being checked is already fixed) — same technique
+// SnarkPack's own reference implementation uses ("the verifier samples from
+// /dev/urandom"). A proof that fails any individual equation only survives
+// the combined check with probability ~1/|Fr|, because the prover cannot
+// have anticipated these weights when producing the proof.
+class BatchedPairingCheck
+{
+public:
+    // Accumulate e(weight*P, Q) into the running Miller-loop product.
+    void
+    addTerm(AggG1 const& P, AggG2 const& Q, AggFr const& weight)
+    {
+        AggG1 const scaledP = weight * P;
+        millerAccum_ = millerAccum_ *
+            Curve::miller_loop(
+                Curve::precompute_G1(scaledP), Curve::precompute_G2(Q));
+    }
+
+    // Multiply the running target product by target^weight — a plain GT
+    // exponentiation, cheap relative to a pairing.
+    void
+    addTarget(AggGT const& target, AggFr const& weight)
+    {
+        targetAccum_ = targetAccum_ * (target ^ weight.as_bigint());
+    }
+
+    // ONE final exponentiation over every accumulated Miller-loop term,
+    // compared against the accumulated target product.
+    bool
+    verify() const
+    {
+        return Curve::final_exponentiation(millerAccum_) == targetAccum_;
+    }
+
+private:
+    AggGT millerAccum_ = AggGT::one();
+    AggGT targetAccum_ = AggGT::one();
+};
 
 AggG1
 multiExpG1(std::vector<AggG1> const& base, std::vector<AggFr> const& coeffs)
@@ -371,6 +421,9 @@ ProofAggregator::verifyAggregate(
     AggregateProof const& agg,
     std::vector<RollupProofData> const& proofs)
 {
+    bool const timing = std::getenv("PROOF_AGGREGATOR_TIMING") != nullptr;
+    auto const t0 = std::chrono::steady_clock::now();
+
     std::size_t const n = proofs.size();
     std::size_t const rounds_n = log2Exact(n);
     if (srs.n() != n)
@@ -422,10 +475,19 @@ ProofAggregator::verifyAggregate(
         xPrev = x;
     }
 
+    auto const t1 = std::chrono::steady_clock::now();
+
+    // All remaining checks (base case, final-key checks, final combined
+    // Groth16-style equation) are batched into ONE combined pairing check
+    // below instead of being verified with individual reduced_pairing calls
+    // — see BatchedPairingCheck's doc comment.
+    BatchedPairingCheck batch;
+
     // Base case: the fully-folded values must equal the direct pairings on
     // the transmitted finalA, finalB.
-    if (Zc != Curve::reduced_pairing(agg.finalA, agg.finalB))
-        return false;
+    AggFr const rho1 = AggFr::random_element();
+    batch.addTerm(agg.finalA, agg.finalB, rho1);
+    batch.addTarget(Zc, rho1);
 
     // Recompute the final commitment keys directly (skip-KZG simplification
     // — see header/memory doc). f_v(X) = PROD_{j=0}^{l-1}(1 + x_(l-j)^-1 *
@@ -452,12 +514,17 @@ ProofAggregator::verifyAggregate(
     AggG1 const w1f = multiExpG1(srs.w1, fwCoeffs);
     AggG1 const w2f = multiExpG1(srs.w2, fwCoeffs);
 
-    if (Tc != Curve::reduced_pairing(agg.finalA, v1f) *
-                  Curve::reduced_pairing(w1f, agg.finalB))
-        return false;
-    if (Uc != Curve::reduced_pairing(agg.finalA, v2f) *
-                  Curve::reduced_pairing(w2f, agg.finalB))
-        return false;
+    AggFr const rho2 = AggFr::random_element();
+    batch.addTerm(agg.finalA, v1f, rho2);
+    batch.addTerm(w1f, agg.finalB, rho2);
+    batch.addTarget(Tc, rho2);
+
+    AggFr const rho3 = AggFr::random_element();
+    batch.addTerm(agg.finalA, v2f, rho3);
+    batch.addTerm(w2f, agg.finalB, rho3);
+    batch.addTarget(Uc, rho3);
+
+    auto const t2 = std::chrono::steady_clock::now();
 
     // Direct (non-GIPA) aggregation of C_i and the per-entry public-input
     // accumulation vk_x_i — see header doc for why this stays O(N) rather
@@ -486,11 +553,37 @@ ProofAggregator::verifyAggregate(
     for (std::size_t i = 0; i < n; ++i)
         sumR = sumR + rPow[i];
 
-    AggGT const rhs = (vk.alpha_g1_beta_g2 ^ sumR.as_bigint()) *
-        Curve::reduced_pairing(vkXAgg, vk.gamma_g2) *
-        Curve::reduced_pairing(Z_C, vk.delta_g2);
+    // Z_AB = alpha_beta^sumR * e(vkXAgg,gamma) * e(Z_C,delta) — the
+    // aggregated Groth16 verification equation — rearranged so the pairing
+    // terms equal Z_AB * (alpha_beta^sumR)^-1.
+    AggFr const rho4 = AggFr::random_element();
+    batch.addTerm(vkXAgg, vk.gamma_g2, rho4);
+    batch.addTerm(Z_C, vk.delta_g2, rho4);
+    batch.addTarget(agg.Z_AB, rho4);
+    batch.addTarget((vk.alpha_g1_beta_g2 ^ sumR.as_bigint()).inverse(), rho4);
 
-    return agg.Z_AB == rhs;
+    auto const t3 = std::chrono::steady_clock::now();
+
+    // All four equations above collapse into ONE combined Miller-loop
+    // product and ONE final exponentiation here.
+    bool const ok = batch.verify();
+
+    if (timing)
+    {
+        auto const t4 = std::chrono::steady_clock::now();
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration_cast<std::chrono::microseconds>(b - a)
+                .count();
+        };
+        std::cerr << "[ProofAggregator::verifyAggregate timing] n=" << n
+                  << " round_fold=" << ms(t0, t1) << "us"
+                  << " final_key_setup=" << ms(t1, t2) << "us"
+                  << " direct_C_vkX_loop=" << ms(t2, t3) << "us"
+                  << " batch.verify=" << ms(t3, t4) << "us"
+                  << " total=" << ms(t0, t4) << "us\n";
+    }
+
+    return ok;
 }
 
 }  // namespace rollup
