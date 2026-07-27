@@ -259,6 +259,27 @@ main(int argc, char** argv)
                   << "\n";
         if (badRoundOk)
             return 1;
+
+        AggregateProof badPi = agg;
+        badPi.piV1 = badPi.piV1 + badPi.piV1;
+        bool const badPiOk = ProofAggregator::verifyAggregate(srs, badPi, proofs);
+        std::cerr << "[bench_proof_aggregator] tamper test (corrupted KZG "
+                     "piV1): "
+                  << (badPiOk ? "FAIL (accepted a bad proof!)" : "PASS (rejected)")
+                  << "\n";
+        if (badPiOk)
+            return 1;
+
+        AggregateProof badV1f = agg;
+        badV1f.v1f = badV1f.v1f + badV1f.v1f;
+        bool const badV1fOk =
+            ProofAggregator::verifyAggregate(srs, badV1f, proofs);
+        std::cerr << "[bench_proof_aggregator] tamper test (corrupted final "
+                     "key v1f): "
+                  << (badV1fOk ? "FAIL (accepted a bad proof!)" : "PASS (rejected)")
+                  << "\n";
+        if (badV1fOk)
+            return 1;
     }
 
     // Machine-parseable summary line for scripted sweeps across N.

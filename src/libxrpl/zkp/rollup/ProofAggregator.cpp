@@ -151,6 +151,39 @@ expandBinomialProduct(std::vector<AggFr> const& factors, std::size_t n)
     return poly;
 }
 
+// Evaluates PROD_{j=0}^{rounds-1} (1 + factor[j] * z^(2^j)) directly at a
+// point z, in O(rounds) = O(log N) field operations — used at verify time
+// instead of expandBinomialProduct's O(N) coefficient expansion, since the
+// verifier only ever needs f(z) (a single scalar), not f's full coefficient
+// vector (that's only needed prover-side, to build a KZG opening).
+AggFr
+evalBinomialProduct(std::vector<AggFr> const& factors, AggFr const& z)
+{
+    AggFr result = AggFr::one();
+    AggFr zPow2j = z;
+    for (std::size_t j = 0; j < factors.size(); ++j)
+    {
+        result = result * (AggFr::one() + factors[j] * zPow2j);
+        zPow2j = zPow2j * zPow2j;
+    }
+    return result;
+}
+
+// Synthetic division: given dense coefficients c[0..n-1] of f(X) (degree
+// n-1) and a point z, returns the coefficients of q(X) = (f(X) - f(z)) /
+// (X - z), a degree n-2 polynomial (length n-1). Standard technique since
+// z is a root of f(X)-f(z) by construction.
+std::vector<AggFr>
+syntheticDivide(std::vector<AggFr> const& c, AggFr const& z)
+{
+    std::size_t const n = c.size();
+    std::vector<AggFr> q(n - 1);
+    q[n - 2] = c[n - 1];
+    for (std::size_t i = n - 2; i-- > 0;)
+        q[i] = c[i + 1] + z * q[i + 1];
+    return q;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -168,7 +201,9 @@ AggSRS::generate(std::size_t n)
     AggSRS srs;
     srs.v1.resize(n);
     srs.v2.resize(n);
+    srs.w1Low.resize(n);
     srs.w1.resize(n);
+    srs.w2Low.resize(n);
     srs.w2.resize(n);
 
     AggFr aPow = AggFr::one();
@@ -177,10 +212,20 @@ AggSRS::generate(std::size_t n)
     {
         srs.v1[i] = aPow * AggG2::one();
         srs.v2[i] = bPow * AggG2::one();
+        // w1Low/w2Low cover the SAME power range as v1/v2 (0..n-1), just in
+        // G1 instead of G2 — needed for w1/w2's KZG opening quotient, which
+        // (unlike w1/w2 themselves) is NOT confined to the shifted n..2n-1
+        // range. Free to capture here since aPow/bPow already pass through
+        // exactly these powers.
+        srs.w1Low[i] = aPow * AggG1::one();
+        srs.w2Low[i] = bPow * AggG1::one();
         aPow = aPow * a;
         bPow = bPow * b;
     }
     // aPow == a^n, bPow == b^n at this point.
+    srs.vkA = a * AggG1::one();
+    srs.vkB = b * AggG1::one();
+
     AggFr aShift = aPow;
     AggFr bShift = bPow;
     for (std::size_t i = 0; i < n; ++i)
@@ -199,7 +244,7 @@ AggSRS::save(std::string const& path) const
     std::ofstream f(path, std::ios::binary);
     if (!f.good())
         throw std::runtime_error("AggSRS::save: cannot open " + path);
-    f << v1 << v2 << w1 << w2;
+    f << v1 << v2 << w1Low << w1 << w2Low << w2 << vkA << vkB;
 }
 
 AggSRS
@@ -209,9 +254,11 @@ AggSRS::load(std::string const& path)
     if (!f.good())
         throw std::runtime_error("AggSRS::load: cannot open " + path);
     AggSRS srs;
-    f >> srs.v1 >> srs.v2 >> srs.w1 >> srs.w2;
+    f >> srs.v1 >> srs.v2 >> srs.w1Low >> srs.w1 >> srs.w2Low >> srs.w2 >>
+        srs.vkA >> srs.vkB;
     if (srs.v1.size() != srs.v2.size() || srs.v1.size() != srs.w1.size() ||
-        srs.v1.size() != srs.w2.size())
+        srs.v1.size() != srs.w2.size() || srs.v1.size() != srs.w1Low.size() ||
+        srs.v1.size() != srs.w2Low.size())
         throw std::runtime_error("AggSRS::load: size mismatch in " + path);
     log2Exact(srs.v1.size());
     return srs;
@@ -232,6 +279,7 @@ AggregateProof::serialize() const
         ss << r.zL << r.zR << r.tL << r.uL << r.tR << r.uR << r.zL_C
            << r.zR_C << r.tL_C << r.uL_C << r.tR_C << r.uR_C;
     ss << finalA << finalB << finalC;
+    ss << v1f << v2f << w1f << w2f << piV1 << piV2 << piW1 << piW2;
     auto s = ss.str();
     return std::vector<unsigned char>(s.begin(), s.end());
 }
@@ -251,6 +299,8 @@ AggregateProof::deserialize(std::vector<unsigned char> const& bytes)
         ss >> r.zL >> r.zR >> r.tL >> r.uL >> r.tR >> r.uR >> r.zL_C >>
             r.zR_C >> r.tL_C >> r.uL_C >> r.tR_C >> r.uR_C;
     ss >> p.finalA >> p.finalB >> p.finalC;
+    ss >> p.v1f >> p.v2f >> p.w1f >> p.w2f >> p.piV1 >> p.piV2 >> p.piW1 >>
+        p.piW2;
     return p;
 }
 
@@ -370,6 +420,7 @@ ProofAggregator::aggregate(
     // verifyAggregate).
     std::vector<AggFr> curR = rPow;
     AggFr xPrev = x0;
+    std::vector<AggFr> xs(rounds_n);
 
     std::size_t m = n;
     for (std::size_t round = 0; round < rounds_n; ++round)
@@ -436,6 +487,7 @@ ProofAggregator::aggregate(
         appendSerialized(xb, uR_C);
         AggFr const x = hashToFr(xb);
         AggFr const xInv = x.inverse();
+        xs[round] = x;
 
         std::vector<AggG1> newA(mp), newC(mp);
         std::vector<AggG2> newB(mp);
@@ -468,6 +520,67 @@ ProofAggregator::aggregate(
         m = mp;
     }
 
+    // ---- KZG openings for the final commitment keys --------------------
+    // v1f/v2f/w1f/w2f are free — already computed by the fold loop above.
+    // Opening proofs certify each is correctly derived, so the verifier
+    // trusts them via O(1)-ish pairing checks instead of an O(N) SRS
+    // multiexp. See the header's KZG section for the group/verification-key
+    // layout this follows.
+    AggG2 const v1f = curV1[0];
+    AggG2 const v2f = curV2[0];
+    AggG1 const w1f = curW1[0];
+    AggG1 const w2f = curW2[0];
+
+    std::vector<unsigned char> zBytes;
+    appendSerialized(zBytes, xs[rounds_n - 1]);
+    appendSerialized(zBytes, v1f);
+    appendSerialized(zBytes, v2f);
+    appendSerialized(zBytes, w1f);
+    appendSerialized(zBytes, w2f);
+    AggFr const z = hashToFr(zBytes);
+
+    // f_v's dense coefficients (length n; degree n-1) — same construction
+    // used for the base-case check, now also feeding a KZG opening. q_v has
+    // degree n-2, fitting entirely within v1/v2's own 0..n-1 SRS range.
+    std::vector<AggFr> fvFactors(rounds_n);
+    for (std::size_t j = 0; j < rounds_n; ++j)
+        fvFactors[j] = xs[rounds_n - 1 - j].inverse();
+    std::vector<AggFr> const fvCoeffs = expandBinomialProduct(fvFactors, n);
+    std::vector<AggFr> const qV = syntheticDivide(fvCoeffs, z);
+    AggG2 const piV1 = multiExpG2(
+        std::vector<AggG2>(v1.begin(), v1.begin() + qV.size()), qV);
+    AggG2 const piV2 = multiExpG2(
+        std::vector<AggG2>(v2.begin(), v2.begin() + qV.size()), qV);
+
+    // f_w's dense coefficients span the FULL 0..2n-1 range (low half all
+    // zero — f_w(X) = X^n * g(X)). The quotient (f_w(X)-y)/(X-z) generally
+    // has nonzero coefficients across that whole range even though f_w's
+    // own low coefficients are zero, so it needs w1Low/w1 (resp. w2Low/w2)
+    // concatenated together as its commitment key.
+    std::vector<AggFr> fwFactors(rounds_n);
+    AggFr const rInv = r.inverse();
+    AggFr rInvPow = rInv;
+    for (std::size_t j = 0; j < rounds_n; ++j)
+    {
+        fwFactors[j] = xs[rounds_n - 1 - j] * rInvPow;
+        rInvPow = rInvPow * rInvPow;
+    }
+    std::vector<AggFr> const fwCoeffsHigh = expandBinomialProduct(fwFactors, n);
+    std::vector<AggFr> fwCoeffsFull(2 * n, AggFr::zero());
+    for (std::size_t i = 0; i < n; ++i)
+        fwCoeffsFull[n + i] = fwCoeffsHigh[i];
+    std::vector<AggFr> const qW = syntheticDivide(fwCoeffsFull, z);
+
+    std::vector<AggG1> fullW1SRS(srs.w1Low);
+    fullW1SRS.insert(fullW1SRS.end(), srs.w1.begin(), srs.w1.end());
+    fullW1SRS.resize(qW.size());
+    AggG1 const piW1 = multiExpG1(fullW1SRS, qW);
+
+    std::vector<AggG1> fullW2SRS(srs.w2Low);
+    fullW2SRS.insert(fullW2SRS.end(), srs.w2.begin(), srs.w2.end());
+    fullW2SRS.resize(qW.size());
+    AggG1 const piW2 = multiExpG1(fullW2SRS, qW);
+
     AggregateProof out;
     out.T_AB = T_AB;
     out.U_AB = U_AB;
@@ -479,6 +592,14 @@ ProofAggregator::aggregate(
     out.finalA = curA[0];
     out.finalB = curB[0];
     out.finalC = curC[0];
+    out.v1f = v1f;
+    out.v2f = v2f;
+    out.w1f = w1f;
+    out.w2f = w2f;
+    out.piV1 = piV1;
+    out.piV2 = piV2;
+    out.piW1 = piW1;
+    out.piW2 = piW2;
     return out;
 }
 
@@ -598,16 +719,16 @@ ProofAggregator::verifyAggregate(
     if (Zc_C != rPrime * agg.finalC)
         return false;
 
-    // Recompute the final commitment keys directly (skip-KZG simplification
-    // — see header/memory doc, still pending). f_v(X) = PROD_{j=0}^{l-1}
-    // (1 + x_(l-j)^-1 * X^(2^j)) — note r' above is exactly f_v(r), the
-    // same polynomial evaluated at a different point. f_w uses x_(l-j) (not
-    // inverted) times r^(-2^j), and its coefficients pair directly against
-    // w1/w2 since those SRS elements already represent the X^(n+i) monomials.
+    // Final commitment keys come DIRECTLY from the proof now (agg.v1f etc)
+    // instead of an O(N) SRS multiexp — KZG opening proofs (below) are what
+    // let the verifier trust them anyway. f_v/f_w's FACTOR lists (not their
+    // expanded coefficients — no O(N) expansion needed at verify time) are
+    // still needed to evaluate y_v=f_v(z), y_w=f_w(z) via evalBinomialProduct,
+    // O(log N). Note r' above (the MIPP base case) is exactly f_v(r), the
+    // same polynomial evaluated at a different point.
     std::vector<AggFr> fvFactors(rounds_n);
     for (std::size_t j = 0; j < rounds_n; ++j)
         fvFactors[j] = xs[rounds_n - 1 - j].inverse();
-    std::vector<AggFr> const fvCoeffs = expandBinomialProduct(fvFactors, n);
 
     std::vector<AggFr> fwFactors(rounds_n);
     AggFr const rInv = r.inverse();
@@ -617,12 +738,11 @@ ProofAggregator::verifyAggregate(
         fwFactors[j] = xs[rounds_n - 1 - j] * rInvPow;
         rInvPow = rInvPow * rInvPow;
     }
-    std::vector<AggFr> const fwCoeffs = expandBinomialProduct(fwFactors, n);
 
-    AggG2 const v1f = multiExpG2(srs.v1, fvCoeffs);
-    AggG2 const v2f = multiExpG2(srs.v2, fvCoeffs);
-    AggG1 const w1f = multiExpG1(srs.w1, fwCoeffs);
-    AggG1 const w2f = multiExpG1(srs.w2, fwCoeffs);
+    AggG2 const v1f = agg.v1f;
+    AggG2 const v2f = agg.v2f;
+    AggG1 const w1f = agg.w1f;
+    AggG1 const w2f = agg.w2f;
 
     AggFr const rho2 = AggFr::random_element();
     batch.addTerm(agg.finalA, v1f, rho2);
@@ -635,8 +755,7 @@ ProofAggregator::verifyAggregate(
     batch.addTarget(Uc, rho3);
 
     // MIPP final-key checks: Tc_C =? e(finalC,v1f), Uc_C =? e(finalC,v2f) —
-    // reuse the SAME v1f/v2f already computed above (MIPP shares TIPP's
-    // v1,v2 keys).
+    // reuse the SAME v1f/v2f (MIPP shares TIPP's v1,v2 keys).
     AggFr const rho5 = AggFr::random_element();
     batch.addTerm(agg.finalC, v1f, rho5);
     batch.addTarget(Tc_C, rho5);
@@ -644,6 +763,48 @@ ProofAggregator::verifyAggregate(
     AggFr const rho6 = AggFr::random_element();
     batch.addTerm(agg.finalC, v2f, rho6);
     batch.addTarget(Uc_C, rho6);
+
+    // ---- KZG opening checks for v1f, v2f, w1f, w2f ---------------------
+    // Recompute the KZG challenge z exactly as aggregate() derived it, and
+    // y_v=f_v(z), y_w=f_w(z) — O(log N) via evalBinomialProduct, not the
+    // O(N) expandBinomialProduct used to actually BUILD the polynomial
+    // (prover-side only, in aggregate()).
+    std::vector<unsigned char> zBytes;
+    appendSerialized(zBytes, xs[rounds_n - 1]);
+    appendSerialized(zBytes, v1f);
+    appendSerialized(zBytes, v2f);
+    appendSerialized(zBytes, w1f);
+    appendSerialized(zBytes, w2f);
+    AggFr const z = hashToFr(zBytes);
+
+    AggFr const yV = evalBinomialProduct(fvFactors, z);
+    AggFr zPowN = z;
+    for (std::size_t j = 0; j < rounds_n; ++j)
+        zPowN = zPowN * zPowN;
+    AggFr const yW = zPowN * evalBinomialProduct(fwFactors, z);
+
+    AggG1 const g = AggG1::one();
+    AggG2 const h = AggG2::one();
+
+    // v1: e(g, v1f - yV*h) =? e(vkA - z*g, piV1)
+    AggFr const rhoKzgV1 = AggFr::random_element();
+    batch.addTerm(g, v1f - yV * h, rhoKzgV1);
+    batch.addTerm(srs.vkA - z * g, agg.piV1, AggFr::zero() - rhoKzgV1);
+
+    // v2: e(g, v2f - yV*h) =? e(vkB - z*g, piV2)
+    AggFr const rhoKzgV2 = AggFr::random_element();
+    batch.addTerm(g, v2f - yV * h, rhoKzgV2);
+    batch.addTerm(srs.vkB - z * g, agg.piV2, AggFr::zero() - rhoKzgV2);
+
+    // w1: e(w1f - yW*g, h) =? e(piW1, v1[1] - z*h)   [v1[1] = h^a]
+    AggFr const rhoKzgW1 = AggFr::random_element();
+    batch.addTerm(w1f - yW * g, h, rhoKzgW1);
+    batch.addTerm(agg.piW1, srs.v1[1] - z * h, AggFr::zero() - rhoKzgW1);
+
+    // w2: e(w2f - yW*g, h) =? e(piW2, v2[1] - z*h)   [v2[1] = h^b]
+    AggFr const rhoKzgW2 = AggFr::random_element();
+    batch.addTerm(w2f - yW * g, h, rhoKzgW2);
+    batch.addTerm(agg.piW2, srs.v2[1] - z * h, AggFr::zero() - rhoKzgW2);
 
     auto const t2 = std::chrono::steady_clock::now();
 

@@ -36,20 +36,41 @@
 // not the public-input scalars, and real implementations don't try to make
 // this part logarithmic either.
 //
-// STILL SIMPLIFIED (next step, not yet done): the final commitment key's
-// KZG opening proof (paper Appendix E) — v1f/v2f/w1f/w2f are still
-// recomputed directly by the verifier via an O(N) multi-exponentiation over
-// the original public SRS elements, rather than via a real O(log N) KZG
-// opening. This is the one remaining O(N) term; see memory for the plan
-// (needs an expanded SRS — w1/w2's quotient polynomials need the full
-// 0..2N-1 range in G1, not just the N..2N-1 range used for the commitment
-// itself, plus two new single verification-key elements g^a, g^b).
+// KZG final-key opening (paper Appendix E) is now implemented for all four
+// keys (v1, v2, w1, w2). v1f/v2f/w1f/w2f are no longer recomputed by the
+// verifier via an O(N) multi-exponentiation — the PROVER sends them
+// directly (free — it already has them from folding) plus a KZG opening
+// proof per key, and the verifier checks each via a small, FIXED number of
+// pairings (folded into the same BatchedPairingCheck as everything else)
+// instead of an N-term multi-exponentiation.
+//
+// v1/v2 commit IN G2 (v1f = h^f_v(a)), so their openings use the "flipped"
+// KZG variant: opening proof pi ALSO in G2 (computed via v1/v2's own SRS,
+// since the quotient q_v has degree <= n-2, well within v1/v2's existing
+// 0..n-1 range — no SRS expansion needed here), verified via
+//   e(g, v1f - y*h) =? e(vkA - z*g, pi_v1)
+// using a NEW single G1 element vkA = g^a (vkB = g^b for v2's check).
+//
+// w1/w2 commit IN G1 (w1f = g^f_w(a)) using the SHIFTED SRS range n..2n-1 —
+// but the QUOTIENT (f_w(X)-y)/(X-z) generically has NONZERO coefficients
+// across the FULL 0..2n-2 range (polynomial division mixes degrees even
+// though f_w's own low-degree coefficients are all zero), so w1/w2's
+// openings DO need an expanded SRS: w1Low/w2Low = {g^(a^i)}/{g^(b^i)} for
+// i=0..n-1, concatenated with the existing w1/w2 (n..2n-1) to cover the
+// full 0..2n-1 range. Verified via the standard (non-flipped) KZG check
+//   e(w1f - y*g, h) =? e(pi_w1, v1[1] - z*h)
+// reusing v1[1]=h^a / v2[1]=h^b as the "opposite-group" verification key —
+// no new G2 elements needed for this side.
 //
 // PERFORMANCE NOTE: verifyAggregate() batches its pairing checks into one
 // shared final exponentiation (BatchedPairingCheck, ProofAggregator.cpp) —
-// this on its own turned out NOT to be the dominant cost (see memory); MIPP
-// above and the still-pending KZG opening are what actually move the
-// needle on making verification genuinely O(log N).
+// this on its own turned out NOT to be the dominant cost (see memory).
+// MIPP's real-world payoff was a genuine surprise (it made things SLOWER
+// at every N tested up to 128 — the O(N) computation it replaces was cheap
+// pairing-free scalar math, while MIPP's own per-round overhead roughly
+// doubles the pairing-heavy GIPA fold; the crossover is projected around
+// N~256-512, not measured). KZG's cost/benefit is measured separately —
+// see memory for the honest comparison once both are in.
 
 #ifndef RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
@@ -84,10 +105,16 @@ using AggFr = libff::alt_bn128_Fr;
 // Groth16 SRS transcripts as the original SnarkPack implementation does).
 struct AggSRS
 {
-    std::vector<AggG2> v1;  // h^(a^i),       i = 0..N-1
-    std::vector<AggG2> v2;  // h^(b^i),       i = 0..N-1
-    std::vector<AggG1> w1;  // g^(a^(N+i)),   i = 0..N-1
-    std::vector<AggG1> w2;  // g^(b^(N+i)),   i = 0..N-1
+    std::vector<AggG2> v1;     // h^(a^i),       i = 0..N-1
+    std::vector<AggG2> v2;     // h^(b^i),       i = 0..N-1
+    std::vector<AggG1> w1Low;  // g^(a^i),       i = 0..N-1   (KZG opening range for w1)
+    std::vector<AggG1> w1;     // g^(a^(N+i)),   i = 0..N-1
+    std::vector<AggG1> w2Low;  // g^(b^i),       i = 0..N-1   (KZG opening range for w2)
+    std::vector<AggG1> w2;     // g^(b^(N+i)),   i = 0..N-1
+    AggG1 vkA;                 // g^a — verification key point for v1's KZG opening
+    AggG1 vkB;                 // g^b — verification key point for v2's KZG opening
+    // v1[1] = h^a and v2[1] = h^b serve as the verification key points for
+    // w1's / w2's KZG openings — no separate G2 elements needed for those.
 
     std::size_t
     n() const
@@ -153,6 +180,17 @@ struct AggregateProof
     AggG1 finalA;
     AggG2 finalB;
     AggG1 finalC;
+
+    // Final commitment keys — sent directly by the prover (free, already
+    // computed while folding) — plus their KZG opening proofs certifying
+    // each is the correct fold of the SRS under the announced challenges.
+    // v1f/v2f live in G2 (v1/v2's own group); w1f/w2f live in G1. Opening
+    // proofs live in the SAME group as the thing they open (piV1/piV2 in
+    // G2, piW1/piW2 in G1) — see the header's KZG section for why.
+    AggG2 v1f, v2f;
+    AggG1 w1f, w2f;
+    AggG2 piV1, piV2;
+    AggG1 piW1, piW2;
 
     std::vector<unsigned char>
     serialize() const;
