@@ -16,43 +16,40 @@
 // is what let us actually MEASURE N=8/16/32/64/128 rather than project them
 // analytically — see the track1-aggregation-snarkpack memory note.
 //
-// Two deliberate scope simplifications relative to the full paper — see the
-// memory note for the full derivation:
+// STATUS (see track1-aggregation-snarkpack memory for the full history):
+// this now implements the MERGED MT-IPP scheme — TIPP (proves Z_AB =
+// PROD e(A_i, B_i^(r^i))) AND MIPP (proves Z_C = <C, r>, the multi-
+// exponentiation aggregating each proof's C element) share one GIPA
+// recursion and one Fiat-Shamir transcript, per the paper's Section 4 "our
+// MT-IPP makes black-box use of the two Pair Group Commitments ... and
+// fuses together proofs for MIPP and TIPP relations." This makes the
+// C-element aggregation genuinely O(log N) instead of the O(N) direct
+// multi-scalar-mult an earlier version of this file used.
 //
-//   1. MIPP is not implemented. MIPP exists purely to avoid O(N) verifier
-//      work when combining the C_i proof elements and the per-proof public
-//      inputs (vk_x_i) under a random linear combination. verifyAggregate()
-//      always computes Z_C = sum(r^i * C_i) and vk_x_agg = sum(r^i * vk_x_i)
-//      directly (O(N) scalar multiplications, no pairings) rather than
-//      running a second GIPA recursion for it. Cheap at small N; means
-//      overall verifier time stays O(N) (dominated by this term) even
-//      though the TIPP recursion itself is O(log N) — see the measured
-//      N=8/16/32/64/128 table in memory for how this actually plays out.
-//   2. The final commitment key's KZG opening proof (paper Appendix E) is
-//      not implemented. The paper's own formula shows the final key is
-//      v = g^f(alpha) for a PUBLIC polynomial f (coefficients depend only on
-//      the Fiat-Shamir challenges), so it can be recomputed directly via an
-//      O(N) multi-exponentiation over the original public SRS elements —
-//      exactly the value a KZG opening would certify, just computed
-//      directly rather than via a log(N)-time evaluation proof.
+// One deliberate scope simplification remains, matching real SnarkPack's
+// OWN design choice (not a corner we cut): the per-proof PUBLIC INPUT
+// aggregation (vk_x_agg = sum r^i * vk_x_i, from each proof's 5 public
+// field elements) stays a direct O(N) computation. The paper's own FC22
+// text says exactly this is fine: "the verification algorithm is linear in
+// terms of the public inputs... small enough to barely count for the total
+// verification time" — MIPP exists for aggregating GROUP elements (C_i),
+// not the public-input scalars, and real implementations don't try to make
+// this part logarithmic either.
 //
-// Neither simplification weakens soundness — both recompute the same public
-// values a full implementation would, just via O(N) direct computation
-// instead of an O(log N) sub-protocol. Implementing both would be needed to
-// get genuinely O(log N) verifier time at large N; not done here — see
-// memory for the honest cost/benefit of that follow-up.
+// STILL SIMPLIFIED (next step, not yet done): the final commitment key's
+// KZG opening proof (paper Appendix E) — v1f/v2f/w1f/w2f are still
+// recomputed directly by the verifier via an O(N) multi-exponentiation over
+// the original public SRS elements, rather than via a real O(log N) KZG
+// opening. This is the one remaining O(N) term; see memory for the plan
+// (needs an expanded SRS — w1/w2's quotient polynomials need the full
+// 0..2N-1 range in G1, not just the N..2N-1 range used for the commitment
+// itself, plus two new single verification-key elements g^a, g^b).
 //
-// What's NOT simplified: the TIPP GIPA recursion itself, which compresses
-// Z_AB = PROD e(A_i, B_i^(r^i)) from N pairings/final-exponentiations down to
-// O(log N) — this is the one thing that can't be computed directly at any N
-// without paying the cost aggregation exists to remove.
-//
-// PERFORMANCE NOTE: verifyAggregate() also does NOT batch its ~7 separate
-// reduced_pairing calls into one combined final exponentiation, unlike
-// SnarkPack's own reference implementation (which explicitly does this to
-// avoid paying final-exponentiation cost repeatedly). This is a real,
-// identified, unclaimed optimization opportunity, not a fundamental limit —
-// left for a follow-up since Stage A's priority was a correct, real number.
+// PERFORMANCE NOTE: verifyAggregate() batches its pairing checks into one
+// shared final exponentiation (BatchedPairingCheck, ProofAggregator.cpp) —
+// this on its own turned out NOT to be the dominant cost (see memory); MIPP
+// above and the still-pending KZG opening are what actually move the
+// needle on making verification genuinely O(log N).
 
 #ifndef RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
@@ -108,12 +105,25 @@ struct AggSRS
     load(std::string const& path);
 };
 
-// One GIPA round's prover-to-verifier message.
-struct TippRound
+// One GIPA round's prover-to-verifier message — TIPP's (A,B') cross terms
+// AND MIPP's (C,r) cross terms together, sharing one Fiat-Shamir challenge
+// per round (the "merged" in MT-IPP). Note the MIPP cross terms (zL_C,
+// zR_C) are G1 multi-exponentiation results, NOT pairings — <C,r> is a
+// group multiexp, not a pairing product, so it folds with plain G1 scalar
+// multiplication where TIPP's zL/zR fold with GT exponentiation. tL_C/uL_C/
+// tR_C/uR_C ARE pairing-valued (they come from CMs(v1,v2;C), which commits
+// via pairings the same way TIPP's CMd does) — same fold pattern as TIPP's
+// tL/uL/tR/uR.
+struct MtRound
 {
+    // TIPP
     AggGT zL, zR;
     AggGT tL, uL;
     AggGT tR, uR;
+    // MIPP
+    AggG1 zL_C, zR_C;
+    AggGT tL_C, uL_C;
+    AggGT tR_C, uR_C;
 };
 
 // The aggregate proof for N Groth16 proofs sharing one verification key.
@@ -130,11 +140,19 @@ struct AggregateProof
     // The GIPA rounds below are the proof that this value is correct.
     AggGT Z_AB;
 
-    std::vector<TippRound> rounds;  // length log2(N)
+    // MIPP: initial CMs(v1,v2;C) commitment (on the ORIGINAL, unfolded C —
+    // same bootstrapping role as T_AB/U_AB) and the claimed multi-
+    // exponentiation value Z_C = <C,r> = sum(r^i * C_i). Z_C is a G1
+    // element (a multiexp result), NOT a GT/pairing value like Z_AB.
+    AggGT T_C, U_C;
+    AggG1 Z_C;
 
-    // Fully-folded (length-1) A and B' after all rounds.
+    std::vector<MtRound> rounds;  // length log2(N)
+
+    // Fully-folded (length-1) A, B', and C after all rounds.
     AggG1 finalA;
     AggG2 finalB;
+    AggG1 finalC;
 
     std::vector<unsigned char>
     serialize() const;

@@ -237,6 +237,28 @@ main(int argc, char** argv)
                   << "\n";
         if (badPub)
             return 1;
+
+        AggregateProof badC = agg;
+        badC.Z_C = badC.Z_C + badC.Z_C;
+        bool const badCOk = ProofAggregator::verifyAggregate(srs, badC, proofs);
+        std::cerr << "[bench_proof_aggregator] tamper test (corrupted MIPP "
+                     "Z_C): "
+                  << (badCOk ? "FAIL (accepted a bad proof!)" : "PASS (rejected)")
+                  << "\n";
+        if (badCOk)
+            return 1;
+
+        AggregateProof badRound = agg;
+        badRound.rounds[0].zL_C = badRound.rounds[0].zL_C + badRound.rounds[0].zL_C;
+        bool const badRoundOk =
+            ProofAggregator::verifyAggregate(srs, badRound, proofs);
+        std::cerr << "[bench_proof_aggregator] tamper test (corrupted MIPP "
+                     "round-0 zL_C): "
+                  << (badRoundOk ? "FAIL (accepted a bad proof!)"
+                                 : "PASS (rejected)")
+                  << "\n";
+        if (badRoundOk)
+            return 1;
     }
 
     // Machine-parseable summary line for scripted sweeps across N.

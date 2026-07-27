@@ -227,10 +227,11 @@ AggregateProof::serialize() const
     std::stringstream ss(std::ios::binary | std::ios::out);
     std::uint64_t const nRounds = rounds.size();
     ss.write(reinterpret_cast<char const*>(&nRounds), sizeof(nRounds));
-    ss << T_AB << U_AB << Z_AB;
+    ss << T_AB << U_AB << Z_AB << T_C << U_C << Z_C;
     for (auto const& r : rounds)
-        ss << r.zL << r.zR << r.tL << r.uL << r.tR << r.uR;
-    ss << finalA << finalB;
+        ss << r.zL << r.zR << r.tL << r.uL << r.tR << r.uR << r.zL_C
+           << r.zR_C << r.tL_C << r.uL_C << r.tR_C << r.uR_C;
+    ss << finalA << finalB << finalC;
     auto s = ss.str();
     return std::vector<unsigned char>(s.begin(), s.end());
 }
@@ -244,11 +245,12 @@ AggregateProof::deserialize(std::vector<unsigned char> const& bytes)
     AggregateProof p;
     std::uint64_t nRounds = 0;
     ss.read(reinterpret_cast<char*>(&nRounds), sizeof(nRounds));
-    ss >> p.T_AB >> p.U_AB >> p.Z_AB;
+    ss >> p.T_AB >> p.U_AB >> p.Z_AB >> p.T_C >> p.U_C >> p.Z_C;
     p.rounds.resize(nRounds);
     for (auto& r : p.rounds)
-        ss >> r.zL >> r.zR >> r.tL >> r.uL >> r.tR >> r.uR;
-    ss >> p.finalA >> p.finalB;
+        ss >> r.zL >> r.zR >> r.tL >> r.uL >> r.tR >> r.uR >> r.zL_C >>
+            r.zR_C >> r.tL_C >> r.uL_C >> r.tR_C >> r.uR_C;
+    ss >> p.finalA >> p.finalB >> p.finalC;
     return p;
 }
 
@@ -284,13 +286,14 @@ ProofAggregator::aggregate(
     if (srs.n() != n)
         throw std::runtime_error("ProofAggregator::aggregate: SRS size != N");
 
-    std::vector<AggG1> A(n);
+    std::vector<AggG1> A(n), C(n);
     std::vector<AggG2> B(n);
     for (std::size_t i = 0; i < n; ++i)
     {
         auto proof = RollupProver::deserializeProofPublic(proofs[i].proof_bytes);
         A[i] = proof.g_A;
         B[i] = proof.g_B;
+        C[i] = proof.g_C;
     }
 
     std::vector<AggG2> const& v1 = srs.v1;
@@ -298,22 +301,25 @@ ProofAggregator::aggregate(
     std::vector<AggG1> const& w1 = srs.w1;
     std::vector<AggG1> const& w2 = srs.w2;
 
-    // Initial commitment on the ORIGINAL (unscaled) A, B — bootstraps r via
-    // Fiat-Shamir before any rescaling. See the memory note: this value is
-    // identical whether computed on (A,B,w1,w2) or the later-rescaled
-    // (A,B',w'1,w'2), because the r and r^-1 factors cancel inside each
-    // pairing — that identity is exactly what makes the rescaling trick sound.
+    // Initial commitments on the ORIGINAL (unscaled) A, B, C — bootstraps r
+    // via Fiat-Shamir before any rescaling. T_AB/U_AB stay identical whether
+    // computed pre- or post-rescaling (see memory note); T_C/U_C = CMs(v1,v2;C)
+    // is MIPP's equivalent initial commitment.
     AggGT const T_AB = ipp(A, v1) * ipp(w1, B);
     AggGT const U_AB = ipp(A, v2) * ipp(w2, B);
+    AggGT const T_C = ipp(C, v1);
+    AggGT const U_C = ipp(C, v2);
 
     std::vector<unsigned char> hcomBytes;
     appendSerialized(hcomBytes, T_AB);
     appendSerialized(hcomBytes, U_AB);
+    appendSerialized(hcomBytes, T_C);
+    appendSerialized(hcomBytes, U_C);
     AggFr const hcom = hashToFr(hcomBytes);
 
-    std::vector<unsigned char> x0Bytes;
-    appendSerialized(x0Bytes, hcom);
-    AggFr const r = hashToFr(x0Bytes);
+    std::vector<unsigned char> rBytes;
+    appendSerialized(rBytes, hcom);
+    AggFr const r = hashToFr(rBytes);
 
     std::vector<AggFr> rPow(n);
     rPow[0] = AggFr::one();
@@ -334,12 +340,36 @@ ProofAggregator::aggregate(
 
     AggGT const Z_AB = ipp(A, Bp);
 
-    std::vector<TippRound> rounds(rounds_n);
-    std::vector<AggG1> curA = A;
+    // MIPP's claimed value: Z_C = <C, r> = sum(r^i * C_i) — a G1
+    // multi-exponentiation (NOT a pairing product like Z_AB). Computing
+    // this here (prover side, O(N), paid once) and proving it via the
+    // shared GIPA recursion below is what makes the VERIFIER's equivalent
+    // check O(log N) instead of redoing this multiexp itself.
+    AggG1 Z_C = AggG1::zero();
+    for (std::size_t i = 0; i < n; ++i)
+        Z_C = Z_C + rPow[i] * C[i];
+
+    // x0 binds the first round's challenge to r and the claimed (Z_AB,Z_C)
+    // values, so neither can be adjusted after the recursion begins.
+    std::vector<unsigned char> x0Bytes;
+    appendSerialized(x0Bytes, hcom);
+    appendSerialized(x0Bytes, Z_AB);
+    appendSerialized(x0Bytes, Z_C);
+    AggFr const x0 = hashToFr(x0Bytes);
+
+    std::vector<MtRound> rounds(rounds_n);
+    std::vector<AggG1> curA = A, curC = C;
     std::vector<AggG2> curB = Bp;
     std::vector<AggG2> curV1 = v1, curV2 = v2;
     std::vector<AggG1> curW1 = w1p, curW2 = w2p;
-    AggFr xPrev = hcom;
+    // r's own fold vector — starts as the full [r^0..r^(n-1)] and folds
+    // with x^-1 each round (the same "opposite side" pattern B' uses,
+    // since <C,r> plays the same structural role as <A,B'>). The verifier
+    // never needs to track this explicitly — it recovers the final folded
+    // scalar via a closed-form O(log N) product instead (see
+    // verifyAggregate).
+    std::vector<AggFr> curR = rPow;
+    AggFr xPrev = x0;
 
     std::size_t m = n;
     for (std::size_t round = 0; round < rounds_n; ++round)
@@ -358,8 +388,12 @@ ProofAggregator::aggregate(
         std::vector<AggG1> W1_hi(curW1.begin() + mp, curW1.begin() + m);
         std::vector<AggG1> W2_lo(curW2.begin(), curW2.begin() + mp);
         std::vector<AggG1> W2_hi(curW2.begin() + mp, curW2.begin() + m);
+        std::vector<AggG1> C_lo(curC.begin(), curC.begin() + mp);
+        std::vector<AggG1> C_hi(curC.begin() + mp, curC.begin() + m);
+        std::vector<AggFr> R_lo(curR.begin(), curR.begin() + mp);
+        std::vector<AggFr> R_hi(curR.begin() + mp, curR.begin() + m);
 
-        // Cross terms — see the memory note for the index derivation
+        // TIPP cross terms — see the memory note for the index derivation
         // (zero-padded CMd expands to cross pairings between the "hi" half
         // of one vector and the "lo" half of the OTHER).
         AggGT const zL = ipp(A_hi, B_lo);
@@ -369,6 +403,23 @@ ProofAggregator::aggregate(
         AggGT const tR = ipp(A_lo, V1_hi) * ipp(W1_lo, B_hi);
         AggGT const uR = ipp(A_lo, V2_hi) * ipp(W2_lo, B_hi);
 
+        // MIPP cross terms. zL_C/zR_C are G1 multiexps (<C,r> is a
+        // multiexp, not a pairing product) — same hi/lo cross pattern as
+        // TIPP's zL/zR. tL_C/uL_C/tR_C/uR_C ARE pairing-valued (CMs(v1,v2;C)
+        // commits via pairings), same padding derivation as TIPP's
+        // tL/uL/tR/uR with C standing in for A (and no B-side term, since
+        // MIPP only commits one vector).
+        AggG1 zL_C = AggG1::zero();
+        for (std::size_t k = 0; k < mp; ++k)
+            zL_C = zL_C + R_lo[k] * C_hi[k];
+        AggG1 zR_C = AggG1::zero();
+        for (std::size_t k = 0; k < mp; ++k)
+            zR_C = zR_C + R_hi[k] * C_lo[k];
+        AggGT const tL_C = ipp(C_hi, V1_lo);
+        AggGT const uL_C = ipp(C_hi, V2_lo);
+        AggGT const tR_C = ipp(C_lo, V1_hi);
+        AggGT const uR_C = ipp(C_lo, V2_hi);
+
         std::vector<unsigned char> xb;
         appendSerialized(xb, xPrev);
         appendSerialized(xb, zL);
@@ -377,30 +428,42 @@ ProofAggregator::aggregate(
         appendSerialized(xb, uL);
         appendSerialized(xb, tR);
         appendSerialized(xb, uR);
+        appendSerialized(xb, zL_C);
+        appendSerialized(xb, zR_C);
+        appendSerialized(xb, tL_C);
+        appendSerialized(xb, uL_C);
+        appendSerialized(xb, tR_C);
+        appendSerialized(xb, uR_C);
         AggFr const x = hashToFr(xb);
         AggFr const xInv = x.inverse();
 
-        std::vector<AggG1> newA(mp);
+        std::vector<AggG1> newA(mp), newC(mp);
         std::vector<AggG2> newB(mp);
         std::vector<AggG2> newV1(mp), newV2(mp);
         std::vector<AggG1> newW1(mp), newW2(mp);
+        std::vector<AggFr> newR(mp);
         for (std::size_t k = 0; k < mp; ++k)
         {
             newA[k] = A_lo[k] + x * A_hi[k];
+            newC[k] = C_lo[k] + x * C_hi[k];
             newB[k] = B_lo[k] + xInv * B_hi[k];
             newV1[k] = V1_lo[k] + xInv * V1_hi[k];
             newV2[k] = V2_lo[k] + xInv * V2_hi[k];
             newW1[k] = W1_lo[k] + x * W1_hi[k];
             newW2[k] = W2_lo[k] + x * W2_hi[k];
+            newR[k] = R_lo[k] + xInv * R_hi[k];
         }
 
-        rounds[round] = TippRound{zL, zR, tL, uL, tR, uR};
+        rounds[round] =
+            MtRound{zL, zR, tL, uL, tR, uR, zL_C, zR_C, tL_C, uL_C, tR_C, uR_C};
         curA = std::move(newA);
+        curC = std::move(newC);
         curB = std::move(newB);
         curV1 = std::move(newV1);
         curV2 = std::move(newV2);
         curW1 = std::move(newW1);
         curW2 = std::move(newW2);
+        curR = std::move(newR);
         xPrev = x;
         m = mp;
     }
@@ -409,9 +472,13 @@ ProofAggregator::aggregate(
     out.T_AB = T_AB;
     out.U_AB = U_AB;
     out.Z_AB = Z_AB;
+    out.T_C = T_C;
+    out.U_C = U_C;
+    out.Z_C = Z_C;
     out.rounds = std::move(rounds);
     out.finalA = curA[0];
     out.finalB = curB[0];
+    out.finalC = curC[0];
     return out;
 }
 
@@ -434,24 +501,37 @@ ProofAggregator::verifyAggregate(
 
     auto const& vk = RollupProver::verificationKey();
 
-    // Reconstruct r exactly as aggregate() derived it.
+    // Reconstruct r and x0 exactly as aggregate() derived them.
     std::vector<unsigned char> hcomBytes;
     appendSerialized(hcomBytes, agg.T_AB);
     appendSerialized(hcomBytes, agg.U_AB);
+    appendSerialized(hcomBytes, agg.T_C);
+    appendSerialized(hcomBytes, agg.U_C);
     AggFr const hcom = hashToFr(hcomBytes);
 
-    std::vector<unsigned char> x0Bytes;
-    appendSerialized(x0Bytes, hcom);
-    AggFr const r = hashToFr(x0Bytes);
+    std::vector<unsigned char> rBytes;
+    appendSerialized(rBytes, hcom);
+    AggFr const r = hashToFr(rBytes);
 
     std::vector<AggFr> rPow(n);
     rPow[0] = AggFr::one();
     for (std::size_t i = 1; i < n; ++i)
         rPow[i] = rPow[i - 1] * r;
 
-    // Reconstruct round challenges and fold (Z,T,U) alongside them.
+    std::vector<unsigned char> x0Bytes;
+    appendSerialized(x0Bytes, hcom);
+    appendSerialized(x0Bytes, agg.Z_AB);
+    appendSerialized(x0Bytes, agg.Z_C);
+    AggFr const x0 = hashToFr(x0Bytes);
+
+    // Reconstruct round challenges and fold (Z,T,U) for BOTH TIPP and MIPP
+    // alongside them — one shared challenge per round. Zc_C folds with G1
+    // scalar multiplication (it's a multiexp result, not a pairing value);
+    // Tc_C/Uc_C fold with GT exponentiation exactly like TIPP's Tc/Uc.
     AggGT Zc = agg.Z_AB, Tc = agg.T_AB, Uc = agg.U_AB;
-    AggFr xPrev = hcom;
+    AggG1 Zc_C = agg.Z_C;
+    AggGT Tc_C = agg.T_C, Uc_C = agg.U_C;
+    AggFr xPrev = x0;
     std::vector<AggFr> xs(rounds_n);
     for (std::size_t round = 0; round < rounds_n; ++round)
     {
@@ -464,6 +544,12 @@ ProofAggregator::verifyAggregate(
         appendSerialized(xb, rd.uL);
         appendSerialized(xb, rd.tR);
         appendSerialized(xb, rd.uR);
+        appendSerialized(xb, rd.zL_C);
+        appendSerialized(xb, rd.zR_C);
+        appendSerialized(xb, rd.tL_C);
+        appendSerialized(xb, rd.uL_C);
+        appendSerialized(xb, rd.tR_C);
+        appendSerialized(xb, rd.uR_C);
         AggFr const x = hashToFr(xb);
         AggFr const xInv = x.inverse();
         xs[round] = x;
@@ -472,28 +558,52 @@ ProofAggregator::verifyAggregate(
         Tc = (rd.tL ^ x.as_bigint()) * Tc * (rd.tR ^ xInv.as_bigint());
         Uc = (rd.uL ^ x.as_bigint()) * Uc * (rd.uR ^ xInv.as_bigint());
 
+        Zc_C = x * rd.zL_C + Zc_C + xInv * rd.zR_C;
+        Tc_C = (rd.tL_C ^ x.as_bigint()) * Tc_C * (rd.tR_C ^ xInv.as_bigint());
+        Uc_C = (rd.uL_C ^ x.as_bigint()) * Uc_C * (rd.uR_C ^ xInv.as_bigint());
+
         xPrev = x;
     }
 
     auto const t1 = std::chrono::steady_clock::now();
 
-    // All remaining checks (base case, final-key checks, final combined
-    // Groth16-style equation) are batched into ONE combined pairing check
-    // below instead of being verified with individual reduced_pairing calls
-    // — see BatchedPairingCheck's doc comment.
+    // All remaining pairing checks (TIPP base case, TIPP final-key checks,
+    // MIPP final-key checks, final combined Groth16-style equation) are
+    // batched into ONE combined pairing check below instead of being
+    // verified with individual reduced_pairing calls — see
+    // BatchedPairingCheck's doc comment.
     BatchedPairingCheck batch;
 
-    // Base case: the fully-folded values must equal the direct pairings on
-    // the transmitted finalA, finalB.
+    // TIPP base case: Zc must equal the direct pairing on finalA, finalB.
     AggFr const rho1 = AggFr::random_element();
     batch.addTerm(agg.finalA, agg.finalB, rho1);
     batch.addTarget(Zc, rho1);
 
+    // MIPP base case: Zc_C must equal finalC scaled by the closed-form
+    // folded r value r' = f_v(r) — a DIRECT G1 comparison, no pairing at
+    // all, computed by evaluating the SAME product-form polynomial that
+    // governs v1/v2's folding (see below) at the point X=r, in O(log N)
+    // scalar multiplications instead of the O(N) direct multiexp an
+    // earlier version of this file used for Z_C entirely.
+    AggFr rPrime = AggFr::one();
+    {
+        AggFr rPow2j = r;
+        for (std::size_t j = 0; j < rounds_n; ++j)
+        {
+            AggFr const xInvHere = xs[rounds_n - 1 - j].inverse();
+            rPrime = rPrime * (AggFr::one() + xInvHere * rPow2j);
+            rPow2j = rPow2j * rPow2j;
+        }
+    }
+    if (Zc_C != rPrime * agg.finalC)
+        return false;
+
     // Recompute the final commitment keys directly (skip-KZG simplification
-    // — see header/memory doc). f_v(X) = PROD_{j=0}^{l-1}(1 + x_(l-j)^-1 *
-    // X^(2^j)); f_w uses x_(l-j) (not inverted) times r^(-2^j), and its
-    // coefficients pair directly against w1/w2 since those SRS elements
-    // already represent the X^(n+i) monomials.
+    // — see header/memory doc, still pending). f_v(X) = PROD_{j=0}^{l-1}
+    // (1 + x_(l-j)^-1 * X^(2^j)) — note r' above is exactly f_v(r), the
+    // same polynomial evaluated at a different point. f_w uses x_(l-j) (not
+    // inverted) times r^(-2^j), and its coefficients pair directly against
+    // w1/w2 since those SRS elements already represent the X^(n+i) monomials.
     std::vector<AggFr> fvFactors(rounds_n);
     for (std::size_t j = 0; j < rounds_n; ++j)
         fvFactors[j] = xs[rounds_n - 1 - j].inverse();
@@ -524,18 +634,27 @@ ProofAggregator::verifyAggregate(
     batch.addTerm(w2f, agg.finalB, rho3);
     batch.addTarget(Uc, rho3);
 
+    // MIPP final-key checks: Tc_C =? e(finalC,v1f), Uc_C =? e(finalC,v2f) —
+    // reuse the SAME v1f/v2f already computed above (MIPP shares TIPP's
+    // v1,v2 keys).
+    AggFr const rho5 = AggFr::random_element();
+    batch.addTerm(agg.finalC, v1f, rho5);
+    batch.addTarget(Tc_C, rho5);
+
+    AggFr const rho6 = AggFr::random_element();
+    batch.addTerm(agg.finalC, v2f, rho6);
+    batch.addTarget(Uc_C, rho6);
+
     auto const t2 = std::chrono::steady_clock::now();
 
-    // Direct (non-GIPA) aggregation of C_i and the per-entry public-input
-    // accumulation vk_x_i — see header doc for why this stays O(N) rather
-    // than a second (MIPP) GIPA recursion.
-    AggG1 Z_C = AggG1::zero();
+    // Public-input accumulation vk_x_agg = sum(r^i * vk_x_i) stays a direct
+    // O(N) computation by DESIGN, matching real SnarkPack (see header doc)
+    // — it's cheap (no pairings, no proof deserialisation: just each
+    // proof's 5 already-public FieldT inputs and a small IC accumulation).
+    // Z_C is no longer computed here at all — MIPP above proves it.
     AggG1 vkXAgg = AggG1::zero();
     for (std::size_t i = 0; i < n; ++i)
     {
-        auto proof = RollupProver::deserializeProofPublic(proofs[i].proof_bytes);
-        Z_C = Z_C + rPow[i] * proof.g_C;
-
         libsnark::r1cs_primary_input<FieldT> primary;
         primary.push_back(proofs[i].anchor);
         primary.push_back(proofs[i].new_anchor);
@@ -555,17 +674,18 @@ ProofAggregator::verifyAggregate(
 
     // Z_AB = alpha_beta^sumR * e(vkXAgg,gamma) * e(Z_C,delta) — the
     // aggregated Groth16 verification equation — rearranged so the pairing
-    // terms equal Z_AB * (alpha_beta^sumR)^-1.
+    // terms equal Z_AB * (alpha_beta^sumR)^-1. Uses agg.Z_C (MIPP-verified
+    // above), not a directly recomputed value.
     AggFr const rho4 = AggFr::random_element();
     batch.addTerm(vkXAgg, vk.gamma_g2, rho4);
-    batch.addTerm(Z_C, vk.delta_g2, rho4);
+    batch.addTerm(agg.Z_C, vk.delta_g2, rho4);
     batch.addTarget(agg.Z_AB, rho4);
     batch.addTarget((vk.alpha_g1_beta_g2 ^ sumR.as_bigint()).inverse(), rho4);
 
     auto const t3 = std::chrono::steady_clock::now();
 
-    // All four equations above collapse into ONE combined Miller-loop
-    // product and ONE final exponentiation here.
+    // All equations above collapse into ONE combined Miller-loop product
+    // and ONE final exponentiation here.
     bool const ok = batch.verify();
 
     if (timing)
@@ -578,7 +698,7 @@ ProofAggregator::verifyAggregate(
         std::cerr << "[ProofAggregator::verifyAggregate timing] n=" << n
                   << " round_fold=" << ms(t0, t1) << "us"
                   << " final_key_setup=" << ms(t1, t2) << "us"
-                  << " direct_C_vkX_loop=" << ms(t2, t3) << "us"
+                  << " vkX_loop=" << ms(t2, t3) << "us"
                   << " batch.verify=" << ms(t3, t4) << "us"
                   << " total=" << ms(t0, t4) << "us\n";
     }
