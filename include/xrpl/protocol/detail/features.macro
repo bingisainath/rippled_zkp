@@ -127,3 +127,9 @@ XRPL_FEATURE(ZKRollup, Supported::yes, VoteBehavior::DefaultYes)
 // ZK-Rollup Track 2 (Phase 6, Option A — monolithic batch circuit). Separate
 // amendment so Track 1 and Track 2 gate independently in the same binary.
 XRPL_FEATURE(ZKRollup2, Supported::yes, VoteBehavior::DefaultYes)
+
+// ZK-Rollup Track 1 + Aggregation (Phase 8 — SnarkPack-style TIPP/MIPP/KZG
+// aggregation of Track 1's per-user proofs). Separate amendment so Track 1's
+// existing tt=61 path is untouched — this is an ALTERNATIVE way to submit a
+// batch to the SAME RollupState tree, not a new rollup.
+XRPL_FEATURE(ZKRollupAgg, Supported::yes, VoteBehavior::DefaultYes)

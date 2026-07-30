@@ -544,3 +544,20 @@ TRANSACTION(ttROLLUP_DEPOSIT2, 63, RollupDeposit2, ({
     {sfDepositApk,  soeREQUIRED},  // Baby Jubjub apk_x of the L2 leaf to credit
     {sfDestination, soeREQUIRED},  // must equal the anchored sfEscrowAccount
 }))
+
+// -----------------------------------------------------------------------------
+// ZK-Rollup Track 1 + Aggregation batch transaction (Phase 8). Same field set
+// and same RollupState tree as ttBATCH_ROLLUP=61 — this is an ALTERNATIVE
+// proof-verification path for the identical rollup (one aggregate proof
+// instead of 8 independent ones checked in a loop), not a separate rollup.
+// sfBatchProof carries a serialised BatchProof whose `proof` bytes are an
+// AggregateProof blob (variable length) instead of 8x192B padded slots.
+// -----------------------------------------------------------------------------
+TRANSACTION(ttBATCH_ROLLUP_AGG, 64, BatchRollupAgg, ({
+    {sfBatchProof,       soeREQUIRED},
+    {sfBatchId,          soeREQUIRED},
+    {sfPrevRoot,         soeREQUIRED},
+    {sfRollupRoot,       soeREQUIRED},
+    {sfTxCount,          soeREQUIRED},
+    {sfSequencerPubKey,  soeREQUIRED},
+}))

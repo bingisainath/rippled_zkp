@@ -5,12 +5,14 @@
 
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pairing.hpp>
 #include <libff/algebra/fields/bigint.hpp>
+#include <libff/common/serialization.hpp>
 
 #include <gmp.h>
 #include <openssl/sha.h>
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -266,47 +268,299 @@ AggSRS::load(std::string const& path)
 
 // ---------------------------------------------------------------------------
 // AggregateProof (de)serialisation
+//
+// Custom fixed-width BINARY encoding — not libff's text-mode operator<</>>.
+// Text mode writes every field element (Fq/Fq2/Fq6/Fq12 component) as an
+// ASCII decimal string of the underlying ~254-bit integer (~77 characters),
+// which is why the old format ran ~33KB for N=8: a GT (Fq12) element alone
+// is 12 of those base-field components, and the proof carries 35 of them
+// (5 top-level + 10 per GIPA round × log2(8)=3 rounds). Writing each base
+// field element as its raw 32-byte limb representation instead — same
+// value, no ASCII — cuts every element to well under half its text size
+// (Fq: ~77 chars -> 32 bytes; GT: ~940 chars -> 384 bytes) with zero change
+// to the cryptography. G1/G2 points are written with both affine
+// coordinates (not compressed) to avoid re-deriving Y via sqrt() on
+// read — the extra bytes that costs are negligible next to the GT savings,
+// which is where nearly all the size lives.
 // ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr std::size_t kFqLimbs = libff::alt_bn128_Fq::num_limbs;
+constexpr std::size_t kFqBytes = kFqLimbs * sizeof(mp_limb_t);
+
+void
+writeFq(std::vector<unsigned char>& out, libff::alt_bn128_Fq const& f)
+{
+    auto const b = f.as_bigint();
+    auto const* p = reinterpret_cast<unsigned char const*>(b.data);
+    out.insert(out.end(), p, p + kFqBytes);
+}
+
+libff::alt_bn128_Fq
+readFq(unsigned char const*& p, unsigned char const* end)
+{
+    if (static_cast<std::size_t>(end - p) < kFqBytes)
+        throw std::runtime_error("AggregateProof::deserialize: truncated Fq");
+    libff::bigint<kFqLimbs> b;
+    std::memcpy(b.data, p, kFqBytes);
+    p += kFqBytes;
+    return libff::alt_bn128_Fq(b);
+}
+
+void
+writeFq2(std::vector<unsigned char>& out, libff::alt_bn128_Fq2 const& f)
+{
+    writeFq(out, f.c0);
+    writeFq(out, f.c1);
+}
+
+libff::alt_bn128_Fq2
+readFq2(unsigned char const*& p, unsigned char const* end)
+{
+    libff::alt_bn128_Fq2 r;
+    r.c0 = readFq(p, end);
+    r.c1 = readFq(p, end);
+    return r;
+}
+
+void
+writeFq6(std::vector<unsigned char>& out, libff::alt_bn128_Fq6 const& f)
+{
+    writeFq2(out, f.c0);
+    writeFq2(out, f.c1);
+    writeFq2(out, f.c2);
+}
+
+libff::alt_bn128_Fq6
+readFq6(unsigned char const*& p, unsigned char const* end)
+{
+    libff::alt_bn128_Fq6 r;
+    r.c0 = readFq2(p, end);
+    r.c1 = readFq2(p, end);
+    r.c2 = readFq2(p, end);
+    return r;
+}
+
+void
+writeGT(std::vector<unsigned char>& out, AggGT const& f)
+{
+    writeFq6(out, f.c0);
+    writeFq6(out, f.c1);
+}
+
+AggGT
+readGT(unsigned char const*& p, unsigned char const* end)
+{
+    AggGT r;
+    r.c0 = readFq6(p, end);
+    r.c1 = readFq6(p, end);
+    return r;
+}
+
+void
+writeG1(std::vector<unsigned char>& out, AggG1 const& g)
+{
+    AggG1 a(g);
+    a.to_affine_coordinates();
+    out.push_back(a.is_zero() ? 1 : 0);
+    writeFq(out, a.X);
+    writeFq(out, a.Y);
+}
+
+AggG1
+readG1(unsigned char const*& p, unsigned char const* end)
+{
+    if (p >= end)
+        throw std::runtime_error("AggregateProof::deserialize: truncated G1 flag");
+    bool const isZero = (*p++ != 0);
+    auto const x = readFq(p, end);
+    auto const y = readFq(p, end);
+    if (isZero)
+        return AggG1::zero();
+    AggG1 r;
+    r.X = x;
+    r.Y = y;
+    r.Z = libff::alt_bn128_Fq::one();
+    return r;
+}
+
+void
+writeG2(std::vector<unsigned char>& out, AggG2 const& g)
+{
+    AggG2 a(g);
+    a.to_affine_coordinates();
+    out.push_back(a.is_zero() ? 1 : 0);
+    writeFq2(out, a.X);
+    writeFq2(out, a.Y);
+}
+
+AggG2
+readG2(unsigned char const*& p, unsigned char const* end)
+{
+    if (p >= end)
+        throw std::runtime_error("AggregateProof::deserialize: truncated G2 flag");
+    bool const isZero = (*p++ != 0);
+    auto const x = readFq2(p, end);
+    auto const y = readFq2(p, end);
+    if (isZero)
+        return AggG2::zero();
+    AggG2 r;
+    r.X = x;
+    r.Y = y;
+    r.Z = libff::alt_bn128_Fq2::one();
+    return r;
+}
+
+}  // namespace
 
 std::vector<unsigned char>
 AggregateProof::serialize() const
 {
-    std::stringstream ss(std::ios::binary | std::ios::out);
+    std::vector<unsigned char> out;
     std::uint64_t const nRounds = rounds.size();
-    ss.write(reinterpret_cast<char const*>(&nRounds), sizeof(nRounds));
-    ss << T_AB << U_AB << Z_AB << T_C << U_C << Z_C;
+    auto const* np = reinterpret_cast<unsigned char const*>(&nRounds);
+    out.insert(out.end(), np, np + sizeof(nRounds));
+
+    writeGT(out, T_AB);
+    writeGT(out, U_AB);
+    writeGT(out, Z_AB);
+    writeGT(out, T_C);
+    writeGT(out, U_C);
+    writeG1(out, Z_C);
     for (auto const& r : rounds)
-        ss << r.zL << r.zR << r.tL << r.uL << r.tR << r.uR << r.zL_C
-           << r.zR_C << r.tL_C << r.uL_C << r.tR_C << r.uR_C;
-    ss << finalA << finalB << finalC;
-    ss << v1f << v2f << w1f << w2f << piV1 << piV2 << piW1 << piW2;
-    auto s = ss.str();
-    return std::vector<unsigned char>(s.begin(), s.end());
+    {
+        writeGT(out, r.zL);
+        writeGT(out, r.zR);
+        writeGT(out, r.tL);
+        writeGT(out, r.uL);
+        writeGT(out, r.tR);
+        writeGT(out, r.uR);
+        writeG1(out, r.zL_C);
+        writeG1(out, r.zR_C);
+        writeGT(out, r.tL_C);
+        writeGT(out, r.uL_C);
+        writeGT(out, r.tR_C);
+        writeGT(out, r.uR_C);
+    }
+    writeG1(out, finalA);
+    writeG2(out, finalB);
+    writeG1(out, finalC);
+    writeG2(out, v1f);
+    writeG2(out, v2f);
+    writeG1(out, w1f);
+    writeG1(out, w2f);
+    writeG2(out, piV1);
+    writeG2(out, piV2);
+    writeG1(out, piW1);
+    writeG1(out, piW2);
+    return out;
 }
 
 AggregateProof
 AggregateProof::deserialize(std::vector<unsigned char> const& bytes)
 {
-    std::stringstream ss(
-        std::string(bytes.begin(), bytes.end()),
-        std::ios::binary | std::ios::in);
-    AggregateProof p;
+    unsigned char const* p = bytes.data();
+    unsigned char const* const end = bytes.data() + bytes.size();
+
+    if (static_cast<std::size_t>(end - p) < sizeof(std::uint64_t))
+        throw std::runtime_error("AggregateProof::deserialize: truncated header");
     std::uint64_t nRounds = 0;
-    ss.read(reinterpret_cast<char*>(&nRounds), sizeof(nRounds));
-    ss >> p.T_AB >> p.U_AB >> p.Z_AB >> p.T_C >> p.U_C >> p.Z_C;
-    p.rounds.resize(nRounds);
-    for (auto& r : p.rounds)
-        ss >> r.zL >> r.zR >> r.tL >> r.uL >> r.tR >> r.uR >> r.zL_C >>
-            r.zR_C >> r.tL_C >> r.uL_C >> r.tR_C >> r.uR_C;
-    ss >> p.finalA >> p.finalB >> p.finalC;
-    ss >> p.v1f >> p.v2f >> p.w1f >> p.w2f >> p.piV1 >> p.piV2 >> p.piW1 >>
-        p.piW2;
-    return p;
+    std::memcpy(&nRounds, p, sizeof(nRounds));
+    p += sizeof(nRounds);
+
+    AggregateProof out;
+    out.T_AB = readGT(p, end);
+    out.U_AB = readGT(p, end);
+    out.Z_AB = readGT(p, end);
+    out.T_C = readGT(p, end);
+    out.U_C = readGT(p, end);
+    out.Z_C = readG1(p, end);
+    out.rounds.resize(nRounds);
+    for (auto& r : out.rounds)
+    {
+        r.zL = readGT(p, end);
+        r.zR = readGT(p, end);
+        r.tL = readGT(p, end);
+        r.uL = readGT(p, end);
+        r.tR = readGT(p, end);
+        r.uR = readGT(p, end);
+        r.zL_C = readG1(p, end);
+        r.zR_C = readG1(p, end);
+        r.tL_C = readGT(p, end);
+        r.uL_C = readGT(p, end);
+        r.tR_C = readGT(p, end);
+        r.uR_C = readGT(p, end);
+    }
+    out.finalA = readG1(p, end);
+    out.finalB = readG2(p, end);
+    out.finalC = readG1(p, end);
+    out.v1f = readG2(p, end);
+    out.v2f = readG2(p, end);
+    out.w1f = readG1(p, end);
+    out.w2f = readG1(p, end);
+    out.piV1 = readG2(p, end);
+    out.piV2 = readG2(p, end);
+    out.piW1 = readG1(p, end);
+    out.piW2 = readG1(p, end);
+    return out;
 }
 
 // ---------------------------------------------------------------------------
-// ProofAggregator
+// ProofAggregator — SRS lifecycle
 // ---------------------------------------------------------------------------
+
+std::shared_ptr<AggSRS> ProofAggregator::srs_;
+bool ProofAggregator::initialised_ = false;
+
+std::string const&
+ProofAggregator::defaultSrsPath()
+{
+    static std::string const path = "/tmp/rippled_rollup_agg_srs";
+    return path;
+}
+
+void
+ProofAggregator::initialize(std::string const& srsPath, std::size_t n)
+{
+    if (initialised_)
+        return;
+
+    std::ifstream probe(srsPath, std::ios::binary);
+    if (probe.good())
+    {
+        probe.close();
+        srs_ = std::make_shared<AggSRS>(AggSRS::load(srsPath));
+        std::cout << "[ProofAggregator] Loaded aggregation SRS from "
+                  << srsPath << " (N=" << srs_->n() << ")" << std::endl;
+    }
+    else
+    {
+        std::cout << "[ProofAggregator] No cached SRS at " << srsPath
+                  << "; generating one (local toxic-waste setup, N=" << n
+                  << ")..." << std::endl;
+        srs_ = std::make_shared<AggSRS>(AggSRS::generate(n));
+        srs_->save(srsPath);
+        std::cout << "[ProofAggregator] Generated and saved aggregation SRS"
+                  << std::endl;
+    }
+    initialised_ = true;
+}
+
+bool
+ProofAggregator::isInitialized()
+{
+    return initialised_;
+}
+
+AggSRS const&
+ProofAggregator::srs()
+{
+    if (!srs_)
+        throw std::runtime_error(
+            "ProofAggregator::srs: not initialised — call initialize() first");
+    return *srs_;
+}
 
 template <typename T>
 void

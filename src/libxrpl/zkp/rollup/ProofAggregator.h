@@ -82,6 +82,7 @@
 #include <libsnark/zk_proof_systems/ppzksnark/r1cs_gg_ppzksnark/r1cs_gg_ppzksnark.hpp>
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -202,6 +203,27 @@ struct AggregateProof
 class ProofAggregator
 {
 public:
+    // Default AggSRS cache path — distinct from RollupProver's and
+    // BatchCircuitProver's key paths on purpose (same discipline as those
+    // two: never share files across independent trusted setups).
+    static std::string const&
+    defaultSrsPath();
+
+    // Load a cached AggSRS from disk, or generate-and-save one (local
+    // toxic-waste setup, same trust model as the Groth16 trusted setup) if
+    // none exists yet. Idempotent — a node calls this once at startup
+    // (RollupModule::onStart), the same way it loads RollupProver's and
+    // BatchCircuitProver's keys.
+    static void
+    initialize(std::string const& srsPath = defaultSrsPath(), std::size_t n = 8);
+
+    static bool
+    isInitialized();
+
+    // Read-only access to the loaded SRS — throws if not yet initialised.
+    static AggSRS const&
+    srs();
+
     // Aggregate N already-produced, individually-valid Track 1 Groth16
     // proofs (from RollupProver::createProof) into one AggregateProof. N
     // (proofs.size()) must be a power of two. Operates purely on the raw
@@ -237,6 +259,9 @@ private:
     template <typename T>
     static void
     appendSerialized(std::vector<unsigned char>& out, T const& elt);
+
+    static std::shared_ptr<AggSRS> srs_;
+    static bool initialised_;
 };
 
 }  // namespace rollup

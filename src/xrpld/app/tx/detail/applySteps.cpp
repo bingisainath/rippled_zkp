@@ -66,6 +66,7 @@
 
 #include <libxrpl/zkp/rollup/BatchVerifier.h>
 #include <libxrpl/zkp/rollup/BatchVerifier2.h>
+#include <libxrpl/zkp/rollup/BatchVerifierAgg.h>
 #include <libxrpl/zkp/rollup/RollupDeposit2.h>
 
 namespace ripple {

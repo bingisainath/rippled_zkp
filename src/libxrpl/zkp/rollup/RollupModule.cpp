@@ -7,6 +7,7 @@
 #include <libxrpl/zkp/rollup/RollupModule.h>
 #include <libxrpl/zkp/rollup/RollupProver.h>
 #include <libxrpl/zkp/rollup/BatchCircuitProver.h>
+#include <libxrpl/zkp/rollup/ProofAggregator.h>
 
 #include <atomic>
 #include <iostream>
@@ -60,6 +61,12 @@ RollupModule::onStart(std::string const& keyPath)
                   << std::endl;
         BatchCircuitProver::initialize();
     }
+
+    // Track 1 + Aggregation (Phase 8): the aggregation SRS is tiny (a
+    // handful of curve points at N=8, nothing like a Groth16 proving key),
+    // so there is no verifier-only/full split to bother with here — just
+    // load it unconditionally.
+    ProofAggregator::initialize();
 
     g_started.store(true, std::memory_order_release);
 }

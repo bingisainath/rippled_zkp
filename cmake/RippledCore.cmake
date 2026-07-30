@@ -297,4 +297,21 @@ if(xrpld)
   )
   target_link_options(bench_track2_scale PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
+
+  # ── gen_batch_blob_agg — Track 1 + Aggregation (Phase 8) batch blob ───────
+  add_executable(gen_batch_blob_agg
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/gen_batch_blob_agg.cpp
+  )
+  target_include_directories(gen_batch_blob_agg
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+  target_link_libraries(gen_batch_blob_agg
+    Ripple::boost
+    Ripple::opts
+    Ripple::libs
+    xrpl.libxrpl
+  )
+  target_link_options(gen_batch_blob_agg PRIVATE
+    -Wl,--unresolved-symbols=ignore-all)
 endif()

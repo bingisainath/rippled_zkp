@@ -117,7 +117,7 @@ depositSpecs(
         DepositSpec s;
         s.key = userKey(userOffset + i);
         s.apkX = EdDSA::derivePublicKey(s.key).x;
-        s.drops = 1'000'000 + i;
+        s.drops = 1'000'000;  // flat per-user amount — 8 users = a clean 8,000,000
         s.nonce = 0;
         if (auto av = seq.account(s.apkX))
             s.nonce = av->nonce;
