@@ -1,9 +1,7 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 6 — Track 2 backed deposit transactor (ttROLLUP_DEPOSIT2 = 63).
+    Track 2 backed deposit transactor (ttROLLUP_DEPOSIT2 = 63).
     See RollupDeposit2.h for why this transaction exists.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/RollupDeposit2.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>

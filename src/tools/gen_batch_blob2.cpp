@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // gen_batch_blob2 — off-node generator for a Track 2 (Option A) ttBATCH_ROLLUP2
 // sfBatchProof blob. Mirrors gen_batch_blob.cpp (Track 1) but builds ONE
 // monolithic proof via RollupSequencer2 instead of N per-entry proofs.
@@ -165,7 +162,7 @@ main(int argc, char** argv)
         // key, measured at 80 s on this VM — then answer PROVE commands over
         // stdin. Per-batch cost drops to the pure prove step.
         //
-        // MEASURED (phase 7, 372,404 constraints, depth 16, N=8):
+        // MEASURED (372,404 constraints, depth 16, N=8):
         //   61.5 s mean over 5 batches, spread 0.41 s (0.7%).
         // That spread is the point: a batch of 8 NoOps costs the same as one
         // carrying a real transfer, because the circuit is FIXED-SIZE — every
@@ -357,7 +354,7 @@ main(int argc, char** argv)
                 nDeposits = 1;
                 userOffset = 5;
             }
-            // TRANSFER <fromUser> <toUser> <drops> <batchId> — Phase 7.
+            // TRANSFER <fromUser> <toUser> <drops> <batchId>
             // Both leaves must already hold a balance (only deposits create
             // accounts, and the circuit cannot prove a credit into an empty
             // slot). Pure L2: the pool total and every L1 balance are

@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 1 + Phase 4a: RollupState SLE helpers.
+    RollupState SLE helpers.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/RollupState.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>

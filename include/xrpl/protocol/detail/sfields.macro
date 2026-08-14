@@ -401,10 +401,8 @@ TYPED_SFIELD(sfShieldedBalance,    AMOUNT,     76)  // Shielded pool balance
 TYPED_SFIELD(sfTimestamp,          UINT32,     77) // Timestamp for the note creation or spending
 
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup foundation fields
-// Do NOT reuse any existing ZKP codes (sfCurrentRoot=36, sfShieldedState=33).
-// -----------------------------------------------------------------------------
+// ZK-Rollup fields. Codes must not collide with the existing ZKP fields above
+// (sfCurrentRoot=36, sfShieldedState=33).
 
 TYPED_SFIELD(sfBatchProof,        VL,      34)  // was TBD VL/30
 TYPED_SFIELD(sfRollupRoot,        UINT256, 34)  // was sfNewRoot 33; renamed to avoid sfCurrentRoot/36 collision
@@ -416,18 +414,16 @@ TYPED_SFIELD(sfTxCount,           UINT32,  49)
 TYPED_SFIELD(sfBatchCounter,      UINT32,  78)
 TYPED_SFIELD(sfRollupTreeDepth,   UINT8,    6)  // renamed from sfTreeDepth
 
-// -----------------------------------------------------------------------------
-// Track 2 backed deposits (B-lite). A Deposit entry inside a batch credits an
-// L2 leaf but debits nobody on L1 — the depositor holds only a Baby Jubjub key
-// and never signs an XRPL transaction. Without the two fields below a sequencer
-// can credit L2 balance that no one ever paid for, and because XRPNotCreated
-// only sums ltACCOUNT_ROOT/ltPAYCHAN/ltESCROW, the ltROLLUP_STATE balance rises
+// Track 2 backed deposits. A Deposit entry inside a batch credits an L2 leaf
+// but debits nobody on L1 — the depositor holds only a Baby Jubjub key and
+// never signs an XRPL transaction. Without the fields below a sequencer could
+// credit L2 balance nobody paid for, and because XRPNotCreated sums only
+// ltACCOUNT_ROOT/ltPAYCHAN/ltESCROW, the ltROLLUP_STATE balance would rise
 // invisibly to the invariant checker.
 //
 // ttROLLUP_DEPOSIT2 debits a real AccountRoot and increments sfPendingDeposits;
 // a batch may then credit L2 leaves only by DECREMENTING it. One counter
 // enforces "total L2 credits <= total L1 payments".
-// -----------------------------------------------------------------------------
 
 TYPED_SFIELD(sfPendingDeposits,   UINT64,  78)  // aggregate of sfDepositClaims, kept as a fast path
 TYPED_SFIELD(sfEscrowAccount,     ACCOUNT, 25)  // L1 account holding rollup collateral
@@ -442,4 +438,4 @@ TYPED_SFIELD(sfClaimDrops,        UINT64,  79)  // drops escrowed by one deposit
 // before a Deposit entry may consume a claim.
 UNTYPED_SFIELD(sfDepositClaims,   ARRAY,   28)  // outstanding claims on ltROLLUP_STATE
 UNTYPED_SFIELD(sfDepositClaim,    OBJECT,  34)  // one {sfDepositApk, sfClaimDrops}
-TYPED_SFIELD(sfTreeFrontier,    VL,    37)   // Phase 4a: serialised RollupMerkleTree frontier
+TYPED_SFIELD(sfTreeFrontier,    VL,    37)   // serialised RollupMerkleTree frontier

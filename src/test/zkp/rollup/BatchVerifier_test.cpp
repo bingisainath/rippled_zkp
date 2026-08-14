@@ -1,15 +1,5 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4b — BatchVerifier integration tests.
-
-    Earlier iteration had two "real-proof success-path" tests that
-    asserted tesSUCCESS for a batch whose synthetic auth path didn't
-    align with the on-chain RollupMerkleTree's actual frontier — so
-    doApply's root-replay correctly rejected them with tecFAILED_PROCESSING
-    or tefINTERNAL. The tests were also fighting jtx's Sequence-cache,
-    producing temBAD_SEQUENCE on retry.
-
-    For Phase 4b the cleanest formulation is:
+    BatchVerifier integration tests.
 
       1. Six rejection-path tests cover preflight (feature-disabled,
          malformed blob, bad txCount, bad signature) and preclaim
@@ -18,19 +8,18 @@
       2. ONE real-proof test: testTamperedEntryProofRejected. It builds
          eight real Groth16 proofs over PoseidonCircuit, flips a byte
          in slot 3, and asserts temBAD_PROOF. For this to fail with
-         temBAD_PROOF (and not some other code), the verifier MUST be
+         temBAD_PROOF, and not some other code, the verifier MUST be
          running and MUST accept the seven untampered proofs while
          rejecting the tampered one. That alone is sufficient evidence
-         the Phase 4b verifier is on the consensus hot path.
+         that the verifier is on the consensus hot path.
 
-    Phase 5's benchmarking suite will add full tesSUCCESS coverage with
-    a harness that peeks at RollupState's serialised frontier to build
-    auth paths matching the on-chain tree.
+    Full tesSUCCESS coverage for a real-proof batch is not attempted here:
+    it needs a harness that peeks at RollupState's serialised frontier to
+    build auth paths matching the on-chain tree.
 
     Each Env-using test funds a fresh dedicated submitter account to
     avoid jtx's autofill Sequence-cache reuse bug.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchProof.h>
 #include <libxrpl/zkp/rollup/BatchVerifier.h>
@@ -72,7 +61,7 @@ using zkp::rollup::SEQUENCER_SIG_BYTES;
 
 class BatchVerifier_test : public beast::unit_test::suite
 {
-    // Must match BatchVerifier.cpp::kEntryProofSlotBytes (Phase 4b).
+    // Must match BatchVerifier.cpp::kEntryProofSlotBytes.
     static constexpr std::size_t kEntryProofSlotBytes = 192;
 
     std::size_t submitterIdx_ = 0;
@@ -88,9 +77,7 @@ class BatchVerifier_test : public beast::unit_test::suite
         return a;
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     struct SignedBatch
     {
@@ -187,7 +174,7 @@ class BatchVerifier_test : public beast::unit_test::suite
 
             if (pd.proof_bytes.size() > kEntryProofSlotBytes)
                 throw std::runtime_error(
-                    "Phase 4b real proof exceeds 192-byte slot");
+                    "real proof exceeds 192-byte slot");
 
             std::memcpy(
                 sb.bp.proof.data() + i * kEntryProofSlotBytes,
@@ -252,9 +239,7 @@ class BatchVerifier_test : public beast::unit_test::suite
         return tx;
     }
 
-    // -------------------------------------------------------------------------
     // Preflight tests
-    // -------------------------------------------------------------------------
 
     void
     testFeatureDisabled()
@@ -317,9 +302,7 @@ class BatchVerifier_test : public beast::unit_test::suite
         env(tx, ter(temBAD_SIGNATURE));
     }
 
-    // -------------------------------------------------------------------------
     // Preclaim tests
-    // -------------------------------------------------------------------------
 
     void
     testNonMonotonicBatchId()
@@ -336,14 +319,12 @@ class BatchVerifier_test : public beast::unit_test::suite
         env(batchRollupTx(submitter, sb), ter(temMALFORMED));
     }
 
-    // -------------------------------------------------------------------------
-    // Phase 4b real-proof tampered-rejection test
-    // -------------------------------------------------------------------------
+    // Real-proof tampered-rejection test
 
     void
     testTamperedEntryProofRejected()
     {
-        testcase("[Phase 4b] tampered entry proof rejected by Poseidon "
+        testcase("tampered entry proof rejected by Poseidon "
                  "verifier");
         using namespace jtx;
 
@@ -366,7 +347,7 @@ class BatchVerifier_test : public beast::unit_test::suite
 
         // verifyBatchProof returns false -> preclaim returns temBAD_PROOF.
         // For this assertion to PASS:
-        //   - the Phase 4b PoseidonCircuit verifier must run
+        //   - the PoseidonCircuit verifier must run
         //   - it must accept the 7 untampered proofs (else we'd hit
         //     temBAD_PROOF for a different reason, but still pass —
         //     the test merely asserts rejection happens)

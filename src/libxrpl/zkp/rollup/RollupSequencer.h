@@ -1,25 +1,19 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// RollupSequencer: Track 1's off-chain batch assembly service.
 //
-// RollupSequencer: off-chain batch assembly service (v2.2 Figure 6).
+//   1. Accepts ClientEntry submissions, each a per-entry Groth16 proof plus
+//      the private witness needed for tree placement.
+//   2. Validates each entry's standalone proof on receipt, so a batch is
+//      never submitted containing a known-invalid entry.
+//   3. Rejects duplicate nullifiers within the pending queue.
+//   4. On reaching BATCH_SIZE (8), assembles a BatchProof, computes newRoot
+//      by a dry-run update_leaf() against a temporary clone of the local
+//      tree, signs batchHash with Ed25519 and submits via the SubmitFn
+//      callback (in production, a POST to rippled's JSON-RPC `submit`).
+//   5. Commits the dry-run leaf updates to the real tree once the
+//      submission is accepted.
 //
-// Responsibilities:
-//   1. Accept ClientEntry submissions (per-entry Groth16 proof + private
-//      witness for tree placement).
-//   2. Validate each entry's standalone Poseidon proof on receipt
-//      (RollupProver::verifyProof) so we never submit a batch containing
-//      a known-invalid entry.
-//   3. Reject duplicate nullifiers within the pending queue.
-//   4. When the queue reaches BATCH_SIZE (= 8): assemble a BatchProof,
-//      perform a dry-run update_leaf() on a temporary clone of the local
-//      Merkle tree to compute newRoot, sign batchHash with Ed25519, and
-//      submit via the SubmitFn callback (production: libcurl POST to
-//      rippled's JSON-RPC `submit` with hex-encoded tx_blob).
-//   5. After submission acceptance, commit the dry-run leaf updates to
-//      the real local tree.
-//
-// L4 limitation acknowledged (v2.2 §2.3): single-process sequencer.
-// Distributed operation is outside Phase 4b's scope.
+// Acknowledged limitation: this is a single-process sequencer. Distributed
+// operation is out of scope.
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUP_SEQUENCER_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUP_SEQUENCER_H_INCLUDED
@@ -111,7 +105,7 @@ class RollupSequencer
 {
 public:
     // The sequencer key pair MUST match sfSequencerKey anchored at genesis
-    // (Phase 1 §5.3.1). Tree depth MUST be 32 to match the on-chain
+    // Tree depth MUST be 32 to match the on-chain
     // RollupState.sfRollupTreeDepth.
     RollupSequencer(
         PublicKey const& seqPub,
@@ -128,7 +122,7 @@ public:
 
     // Force assembly of whatever is in the queue. Returns the submitted
     // BatchProof on success. Returns std::nullopt if the queue is not yet
-    // full (Phase 4b prototype does not pad; Phase 5 may add timed flushes).
+    // full; this prototype does not pad and has no timed flush.
     std::optional<BatchProof>
     flush();
 

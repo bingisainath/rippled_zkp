@@ -9,7 +9,7 @@
 
 set -u
 
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 BUILD_DIR="${BUILD_DIR:-$RIPPLED_ROOT/build}"
 
 CMAKE_CACHE="$BUILD_DIR/CMakeCache.txt"
@@ -45,7 +45,7 @@ echo "RIPPLED_ROOT: $RIPPLED_ROOT"
 echo "BUILD_DIR:    $BUILD_DIR"
 echo ""
 
-# --- 1. Repo presence ------------------------------------------------------
+# 1. Repo presence
 echo "--- 1. Source tree ---"
 if [[ -d "$RIPPLED_ROOT" ]]; then
     echo "  OK  Source tree present"
@@ -60,7 +60,7 @@ else
 fi
 echo ""
 
-# --- 2. Build directory ----------------------------------------------------
+# 2. Build directory
 echo "--- 2. Build directory ---"
 if [[ -d "$BUILD_DIR" ]]; then
     echo "  OK  build/ exists"
@@ -71,7 +71,7 @@ else
 fi
 echo ""
 
-# --- 3. Conan state --------------------------------------------------------
+# 3. Conan state
 echo "--- 3. Conan ---"
 if command -v conan >/dev/null 2>&1; then
     CONAN_VER=$(conan --version 2>/dev/null)
@@ -84,10 +84,10 @@ if [[ -f "$TOOLCHAIN_FILE" ]]; then
     echo "  OK  Conan toolchain present: $TOOLCHAIN_FILE"
     TC_AGE=$(stat -c '%y' "$TOOLCHAIN_FILE" 2>/dev/null | cut -d. -f1)
     echo "      Last modified: $TC_AGE"
-    echo "      => Phase 5 script will SKIP conan install"
+    echo "      => the benchmark script will SKIP conan install"
 else
     echo "  XX  No Conan toolchain at $TOOLCHAIN_FILE"
-    echo "      => Phase 5 script will RUN conan install (slow)"
+    echo "      => the benchmark script will RUN conan install (slow)"
 fi
 
 if [[ -d "$HOME/.conan2" ]]; then
@@ -96,7 +96,7 @@ if [[ -d "$HOME/.conan2" ]]; then
 fi
 echo ""
 
-# --- 4. CMake state --------------------------------------------------------
+# 4. CMake state
 echo "--- 4. CMake ---"
 if command -v cmake >/dev/null 2>&1; then
     CMAKE_VER=$(cmake --version 2>/dev/null | head -1)
@@ -113,14 +113,14 @@ if [[ -f "$CMAKE_CACHE" ]]; then
     echo "      Build type: $BT"
     echo "      C   compiler: $CC"
     echo "      C++ compiler: $CXX"
-    echo "      => Phase 5 script will SKIP cmake configure"
+    echo "      => the benchmark script will SKIP cmake configure"
 else
     echo "  XX  No CMakeCache.txt"
-    echo "      => Phase 5 script will RUN cmake configure"
+    echo "      => the benchmark script will RUN cmake configure"
 fi
 echo ""
 
-# --- 5. Compiler versions --------------------------------------------------
+# 5. Compiler versions
 echo "--- 5. Compilers ---"
 if [[ -x /usr/bin/gcc-13 ]]; then
     GCC13_VER=$(/usr/bin/gcc-13 --version | head -1)
@@ -136,7 +136,7 @@ else
 fi
 echo ""
 
-# --- 6. rippled binary -----------------------------------------------------
+# 6. rippled binary
 echo "--- 6. rippled binary ---"
 if [[ -x "$RIPPLED_BIN" ]]; then
     RIPPLED_VER=$("$RIPPLED_BIN" --version 2>/dev/null | head -1 \
@@ -152,8 +152,8 @@ else
 fi
 echo ""
 
-# --- 7. Trusted-setup keys -------------------------------------------------
-echo "--- 7. Trusted-setup keys (Phase 2 / 4b) ---"
+# 7. Trusted-setup keys
+echo "--- 7. Trusted-setup keys ---"
 PK="/tmp/rippled_rollup_keys_pk"
 VK="/tmp/rippled_rollup_keys_vk"
 if [[ -f "$PK" && -f "$VK" ]]; then
@@ -161,14 +161,14 @@ if [[ -f "$PK" && -f "$VK" ]]; then
     VK_SIZE=$(du -h "$VK" 2>/dev/null | cut -f1)
     echo "  OK  Proving key:      $PK ($PK_SIZE)"
     echo "  OK  Verification key: $VK ($VK_SIZE)"
-    echo "      => Phase 5 will SKIP the ~60s keygen"
+    echo "      => keygen will be SKIPPED (~60s saved)"
 else
     echo "  XX  Keys missing at /tmp/rippled_rollup_keys_*"
     echo "      => First test run will spend ~60s on trusted setup"
 fi
 echo ""
 
-# --- 8. Disk hygiene -------------------------------------------------------
+# 8. Disk hygiene
 echo "--- 8. Disk hygiene ---"
 echo "  /tmp usage:"
 df -h /tmp 2>/dev/null | tail -1 | awk '{printf "      %s used of %s (%s)\n", $3, $2, $5}'
@@ -176,12 +176,12 @@ echo "  Home usage:"
 df -h "$HOME" 2>/dev/null | tail -1 | awk '{printf "      %s used of %s (%s)\n", $3, $2, $5}'
 echo ""
 
-# --- Summary ---------------------------------------------------------------
+# Summary
 echo "==================================================================="
 echo "Recommendation:"
 echo "==================================================================="
 if [[ -f "$TOOLCHAIN_FILE" && -f "$CMAKE_CACHE" && -x "$RIPPLED_BIN" ]]; then
-    echo "  Everything is in place. The next Phase 5 run will be FAST:"
+    echo "  Everything is in place. The next benchmark run will be FAST:"
     echo "  it'll just do an incremental build of the new test files."
     echo ""
     echo "  Run:  bash tools/phase5/run_phase5.sh 5"

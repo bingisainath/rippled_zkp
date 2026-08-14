@@ -120,16 +120,16 @@ XRPL_FEATURE(CryptoConditionsSuite, Supported::yes, VoteBehavior::Obsolete)
 XRPL_FEATURE(ZeroKnowledgePrivacy,Supported::yes,  VoteBehavior::DefaultNo)
 
 
-// ZK-Rollup feature flag (Phase 1). MUST be separate from
-// featureZeroKnowledgePrivacy — see v2.2 §10.4.
+// Track 1 rollup. MUST stay separate from featureZeroKnowledgePrivacy, which
+// gates the unrelated shielded-pool work.
 XRPL_FEATURE(ZKRollup, Supported::yes, VoteBehavior::DefaultYes)
 
-// ZK-Rollup Track 2 (Phase 6, Option A — monolithic batch circuit). Separate
-// amendment so Track 1 and Track 2 gate independently in the same binary.
+// Track 2 rollup (one monolithic batch circuit). A separate amendment so
+// Track 1 and Track 2 gate independently within the same binary.
 XRPL_FEATURE(ZKRollup2, Supported::yes, VoteBehavior::DefaultYes)
 
-// ZK-Rollup Track 1 + Aggregation (Phase 8 — SnarkPack-style TIPP/MIPP/KZG
-// aggregation of Track 1's per-user proofs). Separate amendment so Track 1's
-// existing tt=61 path is untouched — this is an ALTERNATIVE way to submit a
-// batch to the SAME RollupState tree, not a new rollup.
+// Track 3 rollup: SnarkPack-style TIPP/MIPP/KZG aggregation of Track 1's
+// per-user proofs. A separate amendment so Track 1's tt=61 path is untouched —
+// this is an ALTERNATIVE way to submit a batch to the SAME RollupState tree,
+// not a new rollup.
 XRPL_FEATURE(ZKRollupAgg, Supported::yes, VoteBehavior::DefaultYes)

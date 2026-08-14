@@ -1,76 +1,37 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // ProofAggregator: SnarkPack-style aggregation of Track 1's N independent
 // per-user Groth16 proofs into ONE aggregate proof, verified with O(log N)
-// pairings for the recursion itself instead of N separate verifications —
-// while users keep proving locally (Track 1's privacy property; contrast
-// Track 2, where the sequencer proves and therefore sees every
-// transaction's contents).
+// pairings for the recursion instead of N separate verifications — while
+// users keep proving locally, so the sequencer never sees a transaction's
+// contents (contrast Track 2, where the sequencer proves).
 //
-// Construction: the TIPP (target inner pairing product) half of SnarkPack's
-// merged MT-IPP scheme [BMMTV21 / eprint 2021/529, FC22 "SnarkPack: Practical
-// SNARK Aggregation"], applied to N Groth16 proofs sharing one verification
-// key (RollupProver's). N is a runtime parameter (must be a power of two —
-// GIPA halves the vector every round), not a fixed constant: this generality
-// is what let us actually MEASURE N=8/16/32/64/128 rather than project them
-// analytically — see the track1-aggregation-snarkpack memory note.
+// Construction: the merged MT-IPP scheme of SnarkPack [BMMTV21, eprint
+// 2021/529; FC22], over N Groth16 proofs sharing one verification key
+// (RollupProver's). TIPP (Z_AB = PROD e(A_i, B_i^(r^i))) and MIPP
+// (Z_C = <C, r>) share one GIPA recursion and one Fiat-Shamir transcript.
+// N is a runtime parameter and must be a power of two, since GIPA halves
+// the vector every round.
 //
-// STATUS (see track1-aggregation-snarkpack memory for the full history):
-// this now implements the MERGED MT-IPP scheme — TIPP (proves Z_AB =
-// PROD e(A_i, B_i^(r^i))) AND MIPP (proves Z_C = <C, r>, the multi-
-// exponentiation aggregating each proof's C element) share one GIPA
-// recursion and one Fiat-Shamir transcript, per the paper's Section 4 "our
-// MT-IPP makes black-box use of the two Pair Group Commitments ... and
-// fuses together proofs for MIPP and TIPP relations." This makes the
-// C-element aggregation genuinely O(log N) instead of the O(N) direct
-// multi-scalar-mult an earlier version of this file used.
+// Aggregating the public inputs (vk_x_agg = sum r^i * vk_x_i) stays a direct
+// O(N) computation, matching SnarkPack's own design: MIPP aggregates group
+// elements, not public-input scalars, and verification is linear in the
+// public inputs by construction.
 //
-// One deliberate scope simplification remains, matching real SnarkPack's
-// OWN design choice (not a corner we cut): the per-proof PUBLIC INPUT
-// aggregation (vk_x_agg = sum r^i * vk_x_i, from each proof's 5 public
-// field elements) stays a direct O(N) computation. The paper's own FC22
-// text says exactly this is fine: "the verification algorithm is linear in
-// terms of the public inputs... small enough to barely count for the total
-// verification time" — MIPP exists for aggregating GROUP elements (C_i),
-// not the public-input scalars, and real implementations don't try to make
-// this part logarithmic either.
+// KZG final-key openings (paper Appendix E) cover all four folded keys, so
+// the verifier checks them with a fixed number of pairings rather than an
+// N-term multi-exponentiation:
+//   - v1/v2 commit in G2, so their openings use the flipped variant with the
+//     opening proof also in G2, checked as
+//       e(g, v1f - y*h) =? e(vkA - z*g, pi_v1)
+//     against a single new G1 element vkA = g^a (vkB = g^b for v2).
+//   - w1/w2 commit in G1 over the shifted SRS range n..2n-1, but the
+//     quotient generically has nonzero coefficients across the full
+//     0..2n-2 range, so they need w1Low/w2Low = {g^(a^i)} for i=0..n-1
+//     prepended to cover 0..2n-1. Checked normally as
+//       e(w1f - y*g, h) =? e(pi_w1, v1[1] - z*h)
+//     reusing v1[1] = h^a as the opposite-group verification key.
 //
-// KZG final-key opening (paper Appendix E) is now implemented for all four
-// keys (v1, v2, w1, w2). v1f/v2f/w1f/w2f are no longer recomputed by the
-// verifier via an O(N) multi-exponentiation — the PROVER sends them
-// directly (free — it already has them from folding) plus a KZG opening
-// proof per key, and the verifier checks each via a small, FIXED number of
-// pairings (folded into the same BatchedPairingCheck as everything else)
-// instead of an N-term multi-exponentiation.
-//
-// v1/v2 commit IN G2 (v1f = h^f_v(a)), so their openings use the "flipped"
-// KZG variant: opening proof pi ALSO in G2 (computed via v1/v2's own SRS,
-// since the quotient q_v has degree <= n-2, well within v1/v2's existing
-// 0..n-1 range — no SRS expansion needed here), verified via
-//   e(g, v1f - y*h) =? e(vkA - z*g, pi_v1)
-// using a NEW single G1 element vkA = g^a (vkB = g^b for v2's check).
-//
-// w1/w2 commit IN G1 (w1f = g^f_w(a)) using the SHIFTED SRS range n..2n-1 —
-// but the QUOTIENT (f_w(X)-y)/(X-z) generically has NONZERO coefficients
-// across the FULL 0..2n-2 range (polynomial division mixes degrees even
-// though f_w's own low-degree coefficients are all zero), so w1/w2's
-// openings DO need an expanded SRS: w1Low/w2Low = {g^(a^i)}/{g^(b^i)} for
-// i=0..n-1, concatenated with the existing w1/w2 (n..2n-1) to cover the
-// full 0..2n-1 range. Verified via the standard (non-flipped) KZG check
-//   e(w1f - y*g, h) =? e(pi_w1, v1[1] - z*h)
-// reusing v1[1]=h^a / v2[1]=h^b as the "opposite-group" verification key —
-// no new G2 elements needed for this side.
-//
-// PERFORMANCE NOTE: verifyAggregate() batches its pairing checks into one
-// shared final exponentiation (BatchedPairingCheck, ProofAggregator.cpp) —
-// this on its own turned out NOT to be the dominant cost (see memory).
-// MIPP's real-world payoff was a genuine surprise (it made things SLOWER
-// at every N tested up to 128 — the O(N) computation it replaces was cheap
-// pairing-free scalar math, while MIPP's own per-round overhead roughly
-// doubles the pairing-heavy GIPA fold; the crossover is projected around
-// N~256-512, not measured). KZG's cost/benefit is measured separately —
-// see memory for the honest comparison once both are in.
+// verifyAggregate() folds every pairing check into one shared final
+// exponentiation (BatchedPairingCheck, ProofAggregator.cpp).
 
 #ifndef RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_PROOF_AGGREGATOR_H_INCLUDED
@@ -161,7 +122,7 @@ struct AggregateProof
     // (unscaled) A,B — this is what bootstraps the Fiat-Shamir challenge r
     // before any rescaling happens, and is also the GIPA recursion's
     // starting (T_0, U_0). Identical whether computed on (A,B) or the
-    // r-rescaled (A,B',w'1,w'2). See the memory note for why.
+    // r-rescaled (A,B',w'1,w'2).
     AggGT T_AB, U_AB;
 
     // Claimed value of the inner pairing product PROD e(A_i, B_i^(r^i)).

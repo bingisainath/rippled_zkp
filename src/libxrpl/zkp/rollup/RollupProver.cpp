@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "RollupProver.h"
 
@@ -278,9 +276,7 @@ RollupProver::verifyProof(RollupProofData const& proof_data)
     }
 }
 
-// ----------------------------------------------------------------------------
-// Phase 4b: per-entry batch helpers
-// ----------------------------------------------------------------------------
+// Per-entry batch helpers
 
 bool
 RollupProver::isInitialized()

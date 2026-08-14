@@ -5,7 +5,7 @@
 // a drop-in replacement for src/libxrpl/zkp/rollup/PoseidonConstants.cpp.
 //
 // We want the UNOPTIMIZED constants (poseidon_constants.js, NOT _opt.js)
-// because our Phase 2a gadget uses the textbook permutation, not the
+// because the gadget here uses the textbook permutation, not the
 // Hadeshash partial-round optimization. The optimized constants are
 // mathematically equivalent across the WHOLE permutation but produce
 // different intermediate state values, which would break our gadget-vs-
@@ -22,19 +22,20 @@
 // version's index layout differs, override via --t-index=N on the cli.
 //
 // Usage:
-//   cd ~/Sainath
-//   node extract_poseidon_constants.js > rippled_zkp/src/libxrpl/zkp/rollup/PoseidonConstants.cpp
+//   node tools/poseidon/extract_poseidon_constants.js \
+//     > src/libxrpl/zkp/rollup/PoseidonConstants.cpp
 //
-//   # If the t=3 entry is at a different index in your version:
-//   node extract_poseidon_constants.js --t-index=1 > ...
+//   # If the t=3 entry is at a different index in the installed version:
+//   node tools/poseidon/extract_poseidon_constants.js --t-index=1 > ...
 //
 //   # If you accidentally want the OPT version (don't, unless you know why):
-//   node extract_poseidon_constants.js --opt > ...
+//   node tools/poseidon/extract_poseidon_constants.js --opt > ...
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-// ------- Argument parsing (very basic) -------
+// Argument parsing (very basic)
 const args = process.argv.slice(2);
 let useOpt = false;
 let tIndex = null;            // null => auto-detect by row length
@@ -47,9 +48,13 @@ for (const a of args) {
 }
 
 if (!inputFile) {
-    inputFile = useOpt
-        ? path.resolve(process.env.HOME || '.', 'Sainath/circomlibjs/src/poseidon_constants_opt.js')
-        : path.resolve(process.env.HOME || '.', 'Sainath/circomlibjs/src/poseidon_constants.js');
+    // Default: a circomlibjs checkout or install alongside this repository.
+    // Override with --file=, or set CIRCOMLIBJS to the package root.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const base = process.env.CIRCOMLIBJS
+        || path.resolve(here, '..', '..', 'node_modules', 'circomlibjs');
+    inputFile = path.join(base, 'src',
+        useOpt ? 'poseidon_constants_opt.js' : 'poseidon_constants.js');
 }
 
 if (!fs.existsSync(inputFile)) {
@@ -58,7 +63,7 @@ if (!fs.existsSync(inputFile)) {
     process.exit(2);
 }
 
-// ------- Load the JS module via dynamic import -------
+// Load the JS module via dynamic import
 // circomlibjs ships ESM. Convert path to file:// URL for import().
 const fileUrl = new URL('file://' + inputFile).href;
 const mod = await import(fileUrl);
@@ -73,7 +78,7 @@ if (!data.C || !data.M) {
 const C = data.C;
 const M = data.M;
 
-// ------- Auto-detect t=3 row -------
+// Auto-detect t=3 row
 // Round-constant rows for t=3 with R_F=8, R_P=57 have length (8+57)*3 = 195.
 // MDS rows for t=3 are length 9 (3x3 matrix flattened).
 // We pick the row whose lengths match exactly. If multiple match, the user
@@ -116,7 +121,7 @@ for (let i = 0; i < T; ++i)
     for (let j = 0; j < T; ++j)
         mds.push(mdsRows[i][j]);
 
-// ------- Convert hex (or decimal) strings → decimal strings -------
+// Convert hex (or decimal) strings → decimal strings
 // Our C++ parser uses libff::bigint(const char*) which assumes BASE 10.
 // circomlibjs entries are typically "0x..."; convert via BigInt for safety.
 function toDecimalString(s) {
@@ -140,17 +145,13 @@ if (mdsDec.length !== EXPECTED_MDS) {
     process.exit(7);
 }
 
-// ------- Emit the .cpp file -------
+// Emit the .cpp file
 const lines = [];
-lines.push('// Copyright 2026 Sainath, Trinity College Dublin');
-lines.push('// SPDX-License-Identifier: ISC');
-lines.push('//');
 lines.push('// Auto-generated from iden3/circomlibjs/src/poseidon_constants.js by');
 lines.push('// extract_poseidon_constants.js. DO NOT EDIT BY HAND. To regenerate:');
 lines.push('//');
-lines.push('//   cd ~/Sainath');
-lines.push('//   node extract_poseidon_constants.js > \\');
-lines.push('//     rippled_zkp/src/libxrpl/zkp/rollup/PoseidonConstants.cpp');
+lines.push('//   node tools/poseidon/extract_poseidon_constants.js');
+lines.push('//       > src/libxrpl/zkp/rollup/PoseidonConstants.cpp');
 lines.push('//');
 lines.push(`// Source row index: ${chosenIndex}  (auto-detected to match t=3)`);
 lines.push(`// Parameters: t=${T}, R_F=8, R_P=57, x^5 S-box, BN-254 (Fr).`);

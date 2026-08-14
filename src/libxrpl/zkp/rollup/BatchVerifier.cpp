@@ -1,20 +1,12 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4b — BatchVerifier (class BatchRollup).
+    BatchVerifier (class BatchRollup). See BatchVerifier.h.
 
-    Changes from Phase 4a:
-      1. verifyBatchProof() now calls RollupProver::verifyEntry against the
-         PoseidonCircuit verification key, eight times — once per entry.
-         Phase 4a's ZkProver::verifyProof shortcut is removed; ZKProver.h
-         is no longer included from this translation unit.
-      2. The eight per-entry Groth16 proofs are unpacked from the
-         sfBatchProof blob's `proof` field via fixed-size 192-byte slots
-         (kEntryProofSlotBytes). No wire-format change vs Phase 1/4a; the
-         split is internal to this file and to RollupSequencer.
-      3. Preflight gains an explicit RollupProver::isInitialized() guard
-         alongside the existing RollupModule::isStarted() guard.
+    verifyBatchProof() checks each entry's Groth16 proof against the
+    PoseidonCircuit verification key, once per entry. The per-entry
+    proofs are unpacked from the sfBatchProof blob's `proof` field via
+    fixed-size 192-byte slots (kEntryProofSlotBytes); that split is
+    internal to this file and to RollupSequencer, not a wire format.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchVerifier.h>
 #include <libxrpl/zkp/rollup/BatchProof.h>
@@ -65,7 +57,7 @@ walkthroughOn()
 }
 
 // Fixed slot size for each per-entry Groth16 proof inside sfBatchProof.proof.
-// Phase 2 measured the serialised proof at ~137 bytes; 192 gives headroom
+// The serialised proof measures ~137 bytes; 192 gives headroom
 // for libsnark version drift without changing the slot layout. MUST match
 // RollupSequencer::assembleBatch()'s slot size.
 constexpr std::size_t kEntryProofSlotBytes = 192;
@@ -95,7 +87,7 @@ splitEntryProofs(
     return true;
 }
 
-// Phase 4b: verify all eight per-entry Poseidon proofs against the
+// Verify all eight per-entry Poseidon proofs against the
 // PoseidonCircuit verification key. Returns true iff every entry's proof
 // satisfies its (prevRoot, newRoot, nullifier, value) public-input vector.
 // Short-circuits on the first failure.
@@ -131,11 +123,11 @@ BatchRollup::preflight(PreflightContext const& ctx)
     if (!ctx.rules.enabled(featureZKRollup))
         return temDISABLED;
 
-    // Phase 4a: module bootstrap guard.
+    // Module bootstrap guard.
     if (!RollupModule::isStarted())
         return temDISABLED;
 
-    // Phase 4b: explicit prover-keys guard. Should always agree with
+    // Explicit prover-keys guard. Should always agree with
     // RollupModule::isStarted() but check both for defence in depth — a
     // shutdown race between the two flags is otherwise possible.
     if (!RollupProver::isInitialized())
@@ -179,7 +171,7 @@ BatchRollup::preflight(PreflightContext const& ctx)
         tx.getFieldH256(sfRollupRoot) != bp.newRoot)
         return temMALFORMED;
 
-    // Phase 4b: enforce the fixed 8 * 192-byte proof layout at preflight
+    // Enforce the fixed 8 * 192-byte proof layout at preflight
     // so a malformed-size blob fails fast (before preclaim spends pairing
     // cycles). Tampered byte content is caught in preclaim by the
     // per-entry Groth16 check.
@@ -304,7 +296,7 @@ BatchRollup::preclaim(PreclaimContext const& ctx)
             << "[L1-WALKTHROUGH][STEP 13] preclaim solvency OK: totalWithdrawal="
             << totalWithdrawal << " drops within pool balance";
 
-    // Phase 4b: real PoseidonCircuit Groth16 verification, 8x.
+    // Real PoseidonCircuit Groth16 verification, 8x.
     // This is the most expensive check (~pairing per entry); all cheap policy
     // checks above must pass first.
     if (walkthroughOn())
@@ -374,10 +366,10 @@ BatchRollup::doApply()
             << "[L1-WALKTHROUGH][STEP 16] doApply: replayed " << bp.entries.size()
             << " update_leaf() insertions into the L2 tree (in memory)";
 
-    // Phase 4a root-replay cross-check: the sequencer's declared newRoot
-    // must equal what the on-chain replay computes. This is what lets the
-    // eight per-entry Phase 4b proofs share (prevRoot, newRoot) anchors
-    // without an in-circuit aggregation step.
+    // Root-replay cross-check: the sequencer's declared newRoot must equal
+    // what the on-chain replay computes. This is what lets the eight
+    // per-entry proofs share (prevRoot, newRoot) anchors without an
+    // in-circuit aggregation step.
     if (tree->root() != bp.newRoot)
         return tefINTERNAL;
 

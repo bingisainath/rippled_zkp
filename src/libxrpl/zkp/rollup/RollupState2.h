@@ -1,22 +1,19 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Copyright (c) 2026 Trinity College Dublin (MSc dissertation).
 
-    Phase 6 — Track 2 (Option A) rollup state SLE.
+    RollupState2: Track 2's rollup state SLE.
 
-    Independent of Track 1's RollupState: separate keylet (rollup_state2) and
-    a batch counter / account-tree root. The account tree lives OFF-CHAIN with
-    the sequencer (rebuildable from published entries); L1 stores only the
-    root and counter, so there is no on-chain tree/frontier here.
+    Independent of Track 1's RollupState, with its own keylet
+    (rollup_state2) holding a batch counter and the account-tree root. The
+    tree itself lives off-chain with the sequencer, so L1 stores only the
+    root and counter — there is no on-chain tree or frontier here.
 
-    Empty-leaf convention: leaf = FieldT(0), so the empty-tree root is Poseidon
-    applied `depth` times to zero (P^depth(0)) — matching BatchCircuit. This is
-    deliberately DIFFERENT from Track 1's RollupMerkleTree, which uses empty
-    leaf = Poseidon(0,0). Keeping Track 2 on the circuit's convention is what
-    makes genesis / sequencer / circuit roots agree.
+    Empty-leaf convention: a leaf is FieldT(0), so the empty-tree root is
+    Poseidon applied `depth` times to zero. This deliberately differs from
+    Track 1's RollupMerkleTree, which uses an empty leaf of Poseidon(0,0).
+    Matching the circuit's convention is what makes the genesis, sequencer
+    and circuit roots agree.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUPSTATE2_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUPSTATE2_H_INCLUDED

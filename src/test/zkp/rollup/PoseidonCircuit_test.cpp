@@ -1,18 +1,15 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 2c gate. This test validates the *composed* single-note PoseidonCircuit:
+// Validates the *composed* single-note PoseidonCircuit:
 //   1. The constraint count lands inside the design budget (~9–22K for N=1,
 //      depth=32, two auth paths). A blow-out here means a sub-gadget regressed.
 //   2. A correctly built witness satisfies the constraint system end-to-end.
 //   3. Tampering with any public input (anchor, new_anchor, nullifier, value)
 //      makes the system unsatisfiable — i.e. soundness at the R1CS layer
-//      (Groth16 itself is tested in Phase 2d).
+//      (Groth16 itself is tested in RollupProver_test.cpp).
 //
 // Run: ./rippled --unittest=ripple.zkp.PoseidonCircuit
 //
 // IMPORTANT: this test does NOT call Groth16 setup/prove/verify — that is
-// Phase 2d's job (RollupProver_test.cpp). Here we only check that the R1CS
+// RollupProver_test.cpp's job. Here we only check that the R1CS
 // matches the witness via libsnark::protoboard::is_satisfied().
 
 #include "../../../libxrpl/zkp/rollup/PoseidonCircuit.h"
@@ -32,7 +29,7 @@ using namespace zkp::rollup;
 class PoseidonCircuit_test : public beast::unit_test::suite
 {
     // Tree depth used everywhere in this suite. Matches the dissertation's
-    // Phase 1 design (depth-32 IMT). Kept small enough to test fast but large
+    // on-chain design (depth-32 IMT). Kept small enough to test fast but large
     // enough to exercise the auth-path loop.
     static constexpr std::size_t kDepth = 32;
 
@@ -130,7 +127,7 @@ public:
         // A regression that pushes the total over 50K means a sub-gadget
         // has roughly doubled in cost — that's the regression signal.
         // Future optimization (Hadeshash partial-round trick) can bring
-        // this back to ~22K, but is deferred per Phase 2 scope.
+        // this back to ~22K, but is out of scope here.
         BEAST_EXPECT(n <= 50'000);
     }
 

@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "PoseidonCircuit.h"
 
@@ -23,7 +21,7 @@ public:
 
         pb_ = std::make_shared<libsnark::protoboard<FieldT>>();
 
-        // ----- Allocate primary inputs -----
+        // Allocate primary inputs
         // Lever #1 (single Merkle path): the 2nd public input was previously
         // `new_anchor` (the post-update root). The new root is now enforced
         // OFF-circuit by doApply's deterministic root-replay, so the circuit
@@ -44,7 +42,7 @@ public:
         is_withdraw_.allocate(*pb_, "is_withdraw");
         pb_->set_input_sizes(5);
 
-        // ----- Allocate auxiliary inputs -----
+        // Allocate auxiliary inputs
         // Note 1 (old / spent)
         value_.allocate(*pb_, "value");
         rho_.allocate(*pb_, "rho");
@@ -98,7 +96,7 @@ public:
         if (constraints_built_)
             return;
 
-        // ===== 1. Pin generator coordinates =====
+        // 1. Pin generator coordinates
         // gx, gy are constants (BJJ generator). Constrain them equal to
         // the off-circuit values.
         pb_->add_r1cs_constraint(
@@ -110,19 +108,19 @@ public:
                 gy_ - BabyJubjub::generator().y, 1, 0),
             "gy_const");
 
-        // ===== 2. apk = [ask] · G =====
+        // 2. apk = [ask] · G
         bjj_mul_ = std::make_unique<BabyJubjubMulGadget>(
             *pb_, gx_, gy_, ask_bits_, apk_x_, apk_y_, "bjj_mul");
         bjj_mul_->generate_r1cs_constraints();
 
-        // ===== 3. ask_packed must equal sum(bit_i * 2^i) =====
+        // 3. ask_packed must equal sum(bit_i * 2^i)
         // Pack ask bits back into a field element for the nullifier.
         libsnark::packing_gadget<FieldT> ask_pack(
             *pb_, ask_bits_, ask_packed_, "ask_pack");
         ask_pack.generate_r1cs_constraints(false);
         // Note: false = bits already enforced boolean by bjj_mul_.
 
-        // ===== 4. Commitment cm = Poseidon(Poseidon(value,rho), Poseidon(r,apk_x)) =====
+        // 4. Commitment cm = Poseidon(Poseidon(value,rho), Poseidon(r,apk_x))
         cm_h1_gadget_ = std::make_unique<PoseidonGadget>(
             *pb_, value_, rho_, cm_half1_, "cm_h1");
         cm_h1_gadget_->generate_r1cs_constraints();
@@ -135,17 +133,17 @@ public:
             *pb_, cm_half1_, cm_half2_, cm_, "cm");
         cm_gadget_->generate_r1cs_constraints();
 
-        // ===== 5. Nullifier nf = Poseidon(ask, rho) =====
+        // 5. Nullifier nf = Poseidon(ask, rho)
         nf_gadget_ = std::make_unique<PoseidonGadget>(
             *pb_, ask_packed_, rho_, nullifier_, "nf");
         nf_gadget_->generate_r1cs_constraints();
 
-        // ===== 6. value_pub == new_value (deposited amount is public) =====
+        // 6. value_pub == new_value (deposited amount is public)
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(value_pub_ - new_value_, 1, 0),
             "value_pub_eq");
 
-        // ===== 6b. Value conservation for spends (withdrawals) =====
+        // 6b. Value conservation for spends (withdrawals)
         // is_withdraw_ is a boolean public input. When it is 1 (withdrawal),
         // the spent note's value (value_) MUST equal the public/created value
         // (value_pub_) — you cannot withdraw more than the note you are
@@ -162,7 +160,7 @@ public:
                 is_withdraw_, value_ - value_pub_, 0),
             "value_conservation");
 
-        // ===== 7. New commitment (same structure, fresh rho/r) =====
+        // 7. New commitment (same structure, fresh rho/r)
         new_cm_h1_gadget_ = std::make_unique<PoseidonGadget>(
             *pb_, new_value_, new_rho_, new_cm_half1_, "new_cm_h1");
         new_cm_h1_gadget_->generate_r1cs_constraints();
@@ -175,10 +173,10 @@ public:
             *pb_, new_cm_half1_, new_cm_half2_, new_cm_, "new_cm");
         new_cm_gadget_->generate_r1cs_constraints();
 
-        // ===== 8. Merkle auth path: OLD cm hashes up to anchor =====
+        // 8. Merkle auth path: OLD cm hashes up to anchor
         // Single path only. The new commitment's membership in the new root
         // is NOT proven in-circuit; doApply replays the leaf update and checks
-        // the resulting root == bp.newRoot deterministically (Phase 4a). new_cm
+        // the resulting root == bp.newRoot deterministically. new_cm
         // is a public input, so the verifier binds it to entry.commitment.
         // path_old_[0] = cm.
         pb_->add_r1cs_constraint(

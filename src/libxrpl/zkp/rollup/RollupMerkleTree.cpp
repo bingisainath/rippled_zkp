@@ -1,7 +1,4 @@
-// Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin.
-// SPDX-License-Identifier: ISC
-//
-// rollup/RollupMerkleTree.cpp  --- Phase 3 + Phase 4a frontier serialisation.
+// RollupMerkleTree implementation, including frontier serialisation.
 
 #include <cstring>
 #include <stdexcept>
@@ -14,9 +11,7 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
-// =============================================================================
 // Construction
-// =============================================================================
 
 RollupMerkleTree::RollupMerkleTree(std::size_t depth)
     : depth_(depth)
@@ -34,7 +29,7 @@ RollupMerkleTree::RollupMerkleTree(std::size_t depth)
     // Precompute empty-subtree hashes.  This calls PoseidonHash::hash, which
     // self-initialises on first use; we therefore do NOT need a separate
     // "constants populated" guard inside this constructor.  This avoids the
-    // static-init bug class that bit Phase 2 (cf. Phase 2 audit §5.1).
+    // static-initialisation order bug class.
     initializeEmptyHashes();
 }
 
@@ -48,7 +43,7 @@ RollupMerkleTree::initializeEmptyHashes()
     PoseidonHash::initialize();
 
     // empty_hashes_[0] = Poseidon(0, 0) — NOT uint256{}.  This is the central
-    // semantic difference from IncrementalMerkleTree (cf. v2.2 §5).
+    // semantic difference from IncrementalMerkleTree.
     empty_hashes_[0] = h(uint256{}, uint256{});
 
     for (std::size_t level = 1; level <= depth_; ++level)
@@ -58,22 +53,18 @@ RollupMerkleTree::initializeEmptyHashes()
     }
 }
 
-// =============================================================================
 // Hash (delegates to the off-circuit Poseidon reference)
-// =============================================================================
 
 uint256
 RollupMerkleTree::h(uint256 const& left, uint256 const& right)
 {
     // PoseidonHash::hash is the single source of truth for Poseidon semantics
-    // (cf. Phase 2 audit §3.1).  PoseidonGadget produces bit-exactly the same
+    // PoseidonGadget produces bit-exactly the same
     // outputs in-circuit, which is what the cross-layer test relies on.
     return PoseidonHash::hash(left, right);
 }
 
-// =============================================================================
 // Sparse node store
-// =============================================================================
 
 uint256
 RollupMerkleTree::getNode(std::size_t level, std::size_t position) const
@@ -100,9 +91,7 @@ RollupMerkleTree::setNode(
     cached_nodes_[level][position] = value;
 }
 
-// =============================================================================
 // append()
-// =============================================================================
 //
 // Algorithm (mirrors IncrementalMerkleTree::append + updateFrontier, but with
 // Poseidon as the inner hash):
@@ -137,9 +126,7 @@ RollupMerkleTree::append(uint256 const& leaf)
     return position;
 }
 
-// =============================================================================
-// update_leaf()  --- NOVEL CONTRIBUTION (Phase 3)
-// =============================================================================
+// update_leaf()
 //
 // Replace the leaf at `index` (which must already exist, i.e. been appended
 // previously) and recompute the Poseidon path from that leaf up to the root.
@@ -173,9 +160,7 @@ RollupMerkleTree::update_leaf(
     recomputePathFromLeaf(index);
 }
 
-// =============================================================================
 // recomputePathFromLeaf — shared between append and update_leaf
-// =============================================================================
 //
 // Caller must hold mutex_.  Walks from level 0 up to level depth_, computing
 // each parent as Poseidon(left_child, right_child).  Sibling lookups return
@@ -206,9 +191,7 @@ RollupMerkleTree::recomputePathFromLeaf(std::size_t index)
     return getNode(depth_, 0);
 }
 
-// =============================================================================
 // root()
-// =============================================================================
 
 uint256
 RollupMerkleTree::root() const
@@ -221,9 +204,7 @@ RollupMerkleTree::root() const
     return getNode(depth_, 0);
 }
 
-// =============================================================================
 // authPath()
-// =============================================================================
 //
 // Returns the `depth_` sibling hashes that, together with the leaf at
 // `position`, recompute the root.  At each level the sibling is either an
@@ -251,9 +232,7 @@ RollupMerkleTree::authPath(std::size_t position) const
     return path;
 }
 
-// =============================================================================
 // verify() — static helper, walks an auth path
-// =============================================================================
 
 bool
 RollupMerkleTree::verify(
@@ -276,9 +255,7 @@ RollupMerkleTree::verify(
     return cur == expected_root;
 }
 
-// =============================================================================
 // Introspection helpers
-// =============================================================================
 
 std::size_t
 RollupMerkleTree::size() const
@@ -331,9 +308,7 @@ RollupMerkleTree::clear()
     // empty_hashes_ stays as-is — they're constants for this depth.
 }
 
-// =============================================================================
-// Phase 4a: frontier serialisation
-// =============================================================================
+// Frontier serialisation
 //
 // Compact wire format for on-chain persistence in the RollupState SLE.
 // Layout (little-endian):

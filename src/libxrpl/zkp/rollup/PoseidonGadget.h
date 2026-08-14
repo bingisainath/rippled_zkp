@@ -1,21 +1,15 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// In-circuit Poseidon-pi permutation as a libsnark gadget.
 //
-// In-circuit Poseidon-π permutation as a libsnark gadget.
+// Cost per round, counting multiplicative constraints only:
+//   - Full round:    3 lanes x x->x^5, i.e. 3 x (x*x, x2*x2, x4*x) = 9 gates
+//   - Partial round: 1 lane  x x->x^5                              = 3 gates
+//   - The mix layer and round-constant addition are both linear in R1CS and
+//     therefore free.
 //
-// Constraint shape (per round):
-//   - Full round:  3 lanes × x→x^5 = 3 × (x*x=x2, x2*x2=x4, x4*x=x5) = 9 mul gates
-//   - Partial round: 1 lane × x→x^5 = 3 mul gates
-//   - Mix layer is linear in r1cs — costs 0 multiplicative constraints.
-//   - Round-constant addition is linear — costs 0 multiplicative constraints.
-//
-// Total per Poseidon(t=3): 8 * 9 + 57 * 3 = 72 + 171 = 243 mul gates.
-// Plus three lane-equality constraints to project initial state into the
-// protoboard. The "≈200" in the v2.1 doc is based on the optimised mixing
-// layer for partial rounds (Hadeshash partial-round equivalence transform);
-// we reach 243 in the unoptimised form, which is the conservative figure
-// for the ~74K total estimate. (74000 / 8 entries = 9250 / proof slot;
-// each entry uses ≈40 Poseidon calls → ≈9700 mul gates → matches.)
+// Total for t=3: 8 * 9 + 57 * 3 = 243 gates, plus three lane-equality
+// constraints projecting the initial state into the protoboard. This is the
+// unoptimised form; the Hadeshash partial-round equivalence transform would
+// bring it lower, so 243 is the conservative figure.
 
 #ifndef RIPPLE_ZKP_ROLLUP_POSEIDON_GADGET_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_POSEIDON_GADGET_H_INCLUDED
@@ -60,8 +54,8 @@ public:
     void
     generate_r1cs_witness();
 
-    // Reports the multiplicative constraint cost. Used by Phase 2c's
-    // constraint-budget test and by Phase 2d's profiling.
+    // Reports the multiplicative constraint cost, for the
+    // constraint-budget test and for profiling.
     static constexpr std::size_t
     constraintCount()
     {

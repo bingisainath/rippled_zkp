@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "PoseidonHash.h"
 #include "PoseidonConstants.h"

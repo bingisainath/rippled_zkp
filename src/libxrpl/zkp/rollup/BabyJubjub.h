@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // Baby Jubjub: a twisted Edwards curve over the BN-128 scalar field.
 //   E_BJJ : a*x^2 + y^2 = 1 + d*x^2*y^2
 //   a = 168700,  d = 168696

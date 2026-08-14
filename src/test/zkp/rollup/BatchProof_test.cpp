@@ -1,8 +1,7 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 1 — Foundation: BatchProof unit tests.
+    BatchProof unit tests.
 
-    Coverage (per v2.2 + research doc §1.4):
+    Coverage:
         1. testSerializeRoundtrip     — full N=8 serialize/deserialize fidelity
         2. testTxCountMismatch        — isWellFormed rejects txCount != entries.size()
         3. testEmptyProof             — isWellFormed rejects empty proof bytes
@@ -14,7 +13,6 @@
     Run with:
         ./rippled --unittest=BatchProof
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchProof.h>
 
@@ -78,7 +76,6 @@ class BatchProof_test : public beast::unit_test::suite
         return bp;
     }
 
-    // -------------------------------------------------------------------------
 
     void
     testSerializeRoundtrip()

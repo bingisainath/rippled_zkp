@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 2b gate. Run: ./rippled --unittest=ripple.zkp.BabyJubjubGadget
+// Baby Jubjub gadgets. Run: ./rippled --unittest=ripple.zkp.BabyJubjubGadget
 
 #include "../../../libxrpl/zkp/rollup/BabyJubjub.h"
 #include "../../../libxrpl/zkp/rollup/BabyJubjubGadget.h"
@@ -38,7 +35,7 @@ public:
     void
     testGeneratorOnCurve()
     {
-        testcase("Phase 2b — BJJ generator point lies on the curve");
+        testcase("BJJ generator point lies on the curve");
         setupOnce();
         BEAST_EXPECT(BabyJubjub::onCurve(BabyJubjub::generator()));
     }
@@ -46,7 +43,7 @@ public:
     void
     testIdentityIsNeutral()
     {
-        testcase("Phase 2b — identity (0,1) is the additive identity");
+        testcase("identity (0,1) is the additive identity");
         setupOnce();
         BjjPoint id = BjjPoint::identity();
         BjjPoint sum = BabyJubjub::add(BabyJubjub::generator(), id);
@@ -56,7 +53,7 @@ public:
     void
     testDoublingIsAdditionWithSelf()
     {
-        testcase("Phase 2b — dbl(P) == add(P, P)");
+        testcase("dbl(P) == add(P, P)");
         setupOnce();
         BjjPoint dd = BabyJubjub::dbl(BabyJubjub::generator());
         BjjPoint aa =
@@ -68,7 +65,7 @@ public:
     void
     testScalarMul_one()
     {
-        testcase("Phase 2b — [1]·G == G");
+        testcase("[1]·G == G");
         setupOnce();
         auto v = BabyJubjub::refVector_one();
         FieldT s = fromDec(v.scalar_decimal);
@@ -79,7 +76,7 @@ public:
     void
     testScalarMul_known()
     {
-        testcase("Phase 2b — [s]·G matches published EIP-2494 vector");
+        testcase("[s]·G matches published EIP-2494 vector");
         setupOnce();
         auto v = BabyJubjub::refVector_known();
         FieldT s = fromDec(v.scalar_decimal);
@@ -94,7 +91,7 @@ public:
     void
     testAddGadget()
     {
-        testcase("Phase 2b — BabyJubjubAddGadget matches off-circuit add");
+        testcase("BabyJubjubAddGadget matches off-circuit add");
         setupOnce();
         BjjPoint p1 = BabyJubjub::generator();
         BjjPoint p2 = BabyJubjub::dbl(BabyJubjub::generator());
@@ -123,7 +120,7 @@ public:
     void
     testMulGadget_smallScalar()
     {
-        testcase("Phase 2b — BabyJubjubMulGadget agrees with mul() for s=7");
+        testcase("BabyJubjubMulGadget agrees with mul() for s=7");
         setupOnce();
         FieldT s(7);
         BjjPoint expected = BabyJubjub::mul(BabyJubjub::generator(), s);
@@ -157,7 +154,7 @@ public:
     void
     testMulGadget_isUnsatisfiableForWrongOutput()
     {
-        testcase("Phase 2b — corrupting the output wire breaks the system");
+        testcase("corrupting the output wire breaks the system");
         setupOnce();
         libsnark::protoboard<FieldT> pb;
         libsnark::pb_variable<FieldT> px, py, qx, qy;

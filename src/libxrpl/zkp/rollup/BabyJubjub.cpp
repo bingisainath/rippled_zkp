@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "BabyJubjub.h"
 
@@ -174,9 +172,9 @@ BabyJubjub::refVector_known()
 {
     // From EIP-2494 reference: scalar 14035240266687799601661095864649209771790948434046947201833777492504781204499
     // is one published nonzero example with explicit (x,y) image under [s]G.
-    // (Sainath: replace these constants with whichever pair you regenerate
-    // from circomlibjs `mulPointEscalar(B8, s)` so the test asserts on a
-    // value you have personally cross-checked.)
+    // These constants can be regenerated with circomlibjs's
+    // `mulPointEscalar(B8, s)` if an independently derived vector is
+    // preferred.
     static Eip2494Vector v{
         "14035240266687799601661095864649209771790948434046947201833777492504781204499",
         "6708840661592304003639295610396988278433920526457068088856937654463411686256",

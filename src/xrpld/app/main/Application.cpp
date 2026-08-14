@@ -1268,9 +1268,8 @@ ApplicationImp::setup(boost::program_options::variables_map const& cmdline)
 
     Pathfinder::initPathTable();
 
-    // Phase 4a: load RollupProver Groth16 keys at node startup,
-    // not lazily inside preclaim(). See ZkProver lazy-init anti-pattern
-    // in ZkDeposit::preclaim() for what we are explicitly avoiding.
+    // Load the rollup Groth16 keys at node startup rather than lazily inside
+    // preclaim(), so no consensus-path transaction pays for key loading.
     ripple::zkp::rollup::RollupModule::onStart();
 
     auto const startUp = config_->START_UP;

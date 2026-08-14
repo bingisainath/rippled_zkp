@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — Track 2 transactor (ttBATCH_ROLLUP2) driven on a real
+// Track 2 transactor (ttBATCH_ROLLUP2) driven on a real
 // jtx::Env ledger: preflight -> preclaim -> doApply. Complements
 // RollupSequencer2_test (which validates the crypto but bypasses the
 // transactor). MANUAL: Env construction triggers onStart (both provers'
@@ -130,7 +127,7 @@ class BatchVerifier2_test : public beast::unit_test::suite
             return build({sr}, batchId);
         }
 
-        // Phase 7. A pure-L2 batch: no claim consumed, no escrow touched,
+        // A pure-L2 batch: no claim consumed, no escrow touched,
         // no L1 balance moved. `destination` stays zero — the signed `dest`
         // carries the RECIPIENT'S apk_x, which the circuit binds the credited
         // leaf to via is_xfer*(to_x - dest) = 0.
@@ -192,7 +189,7 @@ class BatchVerifier2_test : public beast::unit_test::suite
             EdDSA::derivePublicKey(userKey(i)).x);
     }
 
-    // Phase 1 of the two-phase deposit: real XRP from a real AccountRoot into
+    // Leg 1 of the two-phase deposit: real XRP from a real AccountRoot into
     // the anchored escrow, claimed against a named L2 leaf.
     Json::Value
     rollupDeposit2Tx(
@@ -231,7 +228,7 @@ public:
     void
     testFeatureDisabled()
     {
-        testcase("Phase 6 — preflight rejects when featureZKRollup2 disabled");
+        testcase("preflight rejects when featureZKRollup2 disabled");
         jtx::Env env(*this, jtx::supported_amendments() - featureZKRollup2);
         auto submitter = freshSubmitter(env);
         Chain c;
@@ -242,7 +239,7 @@ public:
     void
     testMalformedBlob()
     {
-        testcase("Phase 6 — preflight rejects a malformed sfBatchProof blob");
+        testcase("preflight rejects a malformed sfBatchProof blob");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         Chain c;
@@ -255,7 +252,7 @@ public:
     void
     testNonMonotonicBatchId()
     {
-        testcase("Phase 6 — preclaim rejects a non-first batchId at genesis");
+        testcase("preclaim rejects a non-first batchId at genesis");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         Chain c;
@@ -267,7 +264,7 @@ public:
     void
     testSuccessfulDepositBatch()
     {
-        testcase("Phase 6 — backed deposit batch applies (tesSUCCESS)");
+        testcase("backed deposit batch applies (tesSUCCESS)");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_ok");
@@ -284,7 +281,7 @@ public:
         auto const escrowBefore = env.balance(submitter).value().xrp();
         auto const depositorBefore = env.balance(depositor).value().xrp();
 
-        // Phase 1: real XRP moves depositor -> escrow, one claim per L2 leaf.
+        // Leg 1: real XRP moves depositor -> escrow, one claim per L2 leaf.
         escrowFor(env, depositor, submitter, 3);
 
         BEAST_EXPECT(
@@ -300,7 +297,7 @@ public:
             BEAST_EXPECT(sle && sle->getFieldU64(sfPendingDeposits) == need);
         }
 
-        // Phase 2: the batch consumes exactly what was escrowed.
+        // Leg 2: the batch consumes exactly what was escrowed.
         auto bb = c.deposits(2, 3);
         env(batchRollup2Tx(submitter, bb), jtx::ter(tesSUCCESS));
         env.close();
@@ -322,7 +319,7 @@ public:
     void
     testUnbackedDepositRejected()
     {
-        testcase("Phase 6 — batch cannot credit L2 with nothing escrowed");
+        testcase("batch cannot credit L2 with nothing escrowed");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
 
@@ -353,7 +350,7 @@ public:
     void
     testPartiallyBackedDepositRejected()
     {
-        testcase("Phase 6 — batch cannot credit more than was escrowed");
+        testcase("batch cannot credit more than was escrowed");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_short");
@@ -375,7 +372,7 @@ public:
     void
     testMisattributedDepositRejected()
     {
-        testcase("Phase 6 — deposit credited to the WRONG apk_x is rejected");
+        testcase("deposit credited to the WRONG apk_x is rejected");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_misattrib");
@@ -432,7 +429,7 @@ public:
     void
     testWrongValueDepositRejected()
     {
-        testcase("Phase 6 — deposit for the wrong VALUE is rejected");
+        testcase("deposit for the wrong VALUE is rejected");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_wrongval");
@@ -457,7 +454,7 @@ public:
     void
     testTwoClaimsConsumedInOneBatch()
     {
-        testcase("Phase 6 — two queued claims consumed by one batch");
+        testcase("two queued claims consumed by one batch");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_two");
@@ -489,7 +486,7 @@ public:
     void
     testClaimsConsumedOutOfOrderAccepted()
     {
-        testcase("Phase 6 — claims may be consumed out of queue order");
+        testcase("claims may be consumed out of queue order");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_order");
@@ -522,7 +519,7 @@ public:
     void
     testMoreDepositsThanClaimsRejected()
     {
-        testcase("Phase 6 — batch with more Deposit entries than claims");
+        testcase("batch with more Deposit entries than claims");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_more");
@@ -544,7 +541,7 @@ public:
     void
     testDepositQueueCap()
     {
-        testcase("Phase 6 — deposit queue cap rejects further deposits");
+        testcase("deposit queue cap rejects further deposits");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account alice("alice2_cap");
@@ -582,7 +579,7 @@ public:
     void
     testDepositToWrongEscrowRejected()
     {
-        testcase("Phase 6 — deposit must target the anchored escrow");
+        testcase("deposit must target the anchored escrow");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_wrong");
@@ -603,7 +600,7 @@ public:
     void
     testDepositBeforeBootstrapRejected()
     {
-        testcase("Phase 6 — deposit rejected before the escrow is anchored");
+        testcase("deposit rejected before the escrow is anchored");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_early");
@@ -628,7 +625,7 @@ public:
     void
     testWithdrawalMovesRealXRP()
     {
-        testcase("Phase 6 — withdrawal moves real XRP to a distinct account");
+        testcase("withdrawal moves real XRP to a distinct account");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_wd");
@@ -688,7 +685,7 @@ public:
     void
     testTransferAppliesOnL1()
     {
-        testcase("Phase 7 — transfer batch applies and moves NO real XRP");
+        testcase("transfer batch applies and moves NO real XRP");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_xfer");
@@ -737,7 +734,7 @@ public:
     void
     testWithdrawalBeyondEscrowRejected()
     {
-        testcase("Phase 6 — withdrawal rejected when escrow cannot fund it");
+        testcase("withdrawal rejected when escrow cannot fund it");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_drain");
@@ -773,7 +770,7 @@ public:
     void
     testWrongPrevRootRejected()
     {
-        testcase("Phase 6 — preclaim rejects a batch off the current root");
+        testcase("preclaim rejects a batch off the current root");
         jtx::Env env(*this, jtx::supported_amendments() | featureZKRollup2);
         auto submitter = freshSubmitter(env);
         jtx::Account depositor("depositor2_chain");

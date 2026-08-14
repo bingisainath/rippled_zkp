@@ -1,22 +1,17 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Copyright (c) 2026 Trinity College Dublin (MSc dissertation).
 
-    Phase 8 — BatchVerifierAgg: on-chain transactor for ttBATCH_ROLLUP_AGG.
+    BatchVerifierAgg: on-chain transactor for ttBATCH_ROLLUP_AGG.
 
-    This is Track 1's EXISTING RollupState tree (same keylet::rollup_state(),
-    same nullifier/commitment model, same genesis) reached via an
-    ALTERNATIVE proof path: one SnarkPack-style aggregate proof (TIPP/MIPP/
-    KZG, see ProofAggregator.h) instead of 8 independent Groth16 proofs
-    checked in a loop (BatchVerifier.cpp / ttBATCH_ROLLUP=61).
+    This reaches Track 1's existing RollupState tree — same keylet, same
+    nullifier and commitment model, same genesis — by an alternative proof
+    path: one SnarkPack-style aggregate proof (see ProofAggregator.h)
+    instead of N independent Groth16 proofs checked in a loop.
 
-    Everything about doApply's STATE MUTATION is identical to BatchRollup —
-    the aggregate proof only changes HOW the batch is cryptographically
-    verified, not what changes on the ledger once it's accepted. Only
-    preclaim's verification step differs from BatchRollup.
+    Only preclaim's verification step differs from BatchRollup. State
+    mutation in doApply is identical: the aggregate proof changes how a
+    batch is verified, not what it does to the ledger once accepted.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCHVERIFIERAGG_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCHVERIFIERAGG_H_INCLUDED

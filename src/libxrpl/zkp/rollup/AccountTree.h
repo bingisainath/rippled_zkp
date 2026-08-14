@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // AccountTree: the off-chain sparse Poseidon Merkle tree the Track 2
 // sequencer maintains over account leaves. Leaf-0 convention (empty leaf =
 // FieldT(0), empty-tree root = P^depth(0)) — matches BatchCircuit and

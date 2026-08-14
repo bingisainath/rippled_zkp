@@ -1,11 +1,8 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // Auto-generated from iden3/circomlibjs/src/poseidon_constants.js by
 // extract_poseidon_constants.js. DO NOT EDIT BY HAND. To regenerate:
 //
-//   cd ~/Sainath
-//   node extract_poseidon_constants.js > rippled_zkp/src/libxrpl/zkp/rollup/PoseidonConstants.cpp
+//   node tools/poseidon/extract_poseidon_constants.js
+//       > src/libxrpl/zkp/rollup/PoseidonConstants.cpp
 //
 // Source row index: 1  (auto-detected to match t=3)
 // Parameters: t=3, R_F=8, R_P=57, x^5 S-box, BN-254 (Fr).

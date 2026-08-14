@@ -1,9 +1,9 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Phase 1 — Foundation; Phase 4a — frontier persistence.
+
+    RollupState: Track 1's rollup state SLE, including tree-frontier
+    persistence.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUPSTATE_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUPSTATE_H_INCLUDED
@@ -61,7 +61,7 @@ public:
     createGenesis(ApplyView& view,
                   std::vector<std::uint8_t> const& sequencerPubKey);
 
-    // Phase 4a: tree-frontier persistence.
+    // Tree-frontier persistence.
     // RollupMerkleTree has a std::mutex (non-movable, non-copyable), so we
     // must return it by unique_ptr rather than by value.
     static std::unique_ptr<RollupMerkleTree>

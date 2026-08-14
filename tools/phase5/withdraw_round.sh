@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ============================================================
 #  withdraw_round.sh — submit ONE ZK withdrawal batch to a running node.
 #  Companion to accumulate_xrp_demo.sh. Each call credits +20 XRP to DEST
 #  and prints the destination balance before/after, so successive calls show
@@ -10,14 +9,13 @@
 #
 #  Reuses the node booted by accumulate_xrp_demo.sh (port 5098 by default).
 #  Honours the same env overrides (ZKACC_PORT, DEST, GEN_TOOL, RIPPLED_ROOT).
-# ============================================================
 set -uo pipefail
 
 BATCH_ID="${1:-}"
 [[ -n "$BATCH_ID" ]] || { echo "usage: $0 <batchId>   (e.g. 2, then 3, then 4)"; exit 1; }
 [[ "$BATCH_ID" =~ ^[0-9]+$ && "$BATCH_ID" -ge 2 ]] || { echo "batchId must be an integer >= 2"; exit 1; }
 
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
 GEN_TOOL="${GEN_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"
 PORT="${ZKACC_PORT:-5098}"

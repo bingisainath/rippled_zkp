@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4a — NullifierStore implementation.
+    NullifierStore implementation.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/NullifierStore.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>

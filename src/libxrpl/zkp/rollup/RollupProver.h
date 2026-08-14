@@ -1,18 +1,14 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// RollupProver: Groth16 setup, prove and verify for PoseidonCircuit.
 //
-// RollupProver: Groth16 setup / prove / verify for the PoseidonCircuit.
-// Per v2.2 §13.1, this MUST keep its own keys, separate from ZkProver's
-// SHA-256-bound keys. Default key path: /tmp/rippled_rollup_keys_{pk,vk}.
+// This MUST keep its own key pair, separate from ZkProver's SHA-256-bound
+// keys. Default key path: /tmp/rippled_rollup_keys_{pk,vk}.
 //
-// Phase 4b additions:
-//   - verifyEntry(RollupTxEntry, proof_bytes): pack public inputs from a
-//     single batch entry and verify the per-entry Poseidon proof on the
-//     consensus hot path. The N=8 batch is verified as 8 sequential calls
-//     in BatchVerifier::preclaim() (see design Figure 3 / Figure 5).
-//   - createEntryProof(...): convenience wrapper that takes the per-entry
-//     witness directly. Used by RollupSequencer test harnesses and by the
-//     replacement Phase 1 success-path tests.
+//   verifyEntry(RollupTxEntry, proof_bytes) packs the public inputs from a
+//   single batch entry and verifies that entry's proof on the consensus hot
+//   path; BatchVerifier::preclaim() calls it once per entry.
+//
+//   createEntryProof(...) takes the per-entry witness directly, and is used
+//   by the sequencer test harnesses.
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUP_PROVER_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUP_PROVER_H_INCLUDED
@@ -59,7 +55,7 @@ public:
     // One-shot initialisation: load keys from disk, or generate-and-save if
     // they don't exist yet. Idempotent.
     //
-    // IMPORTANT (v2.2 §13.1): never call ZkProver::initialize() in this path.
+    // IMPORTANT: never call ZkProver::initialize() in this path.
     // ZkProver loads SHA-256-circuit keys; we load Poseidon-circuit keys.
     static void
     initialize(std::string const& key_path = defaultKeyPath(),
@@ -106,9 +102,7 @@ public:
     static bool
     verifyProof(RollupProofData const& proof_data);
 
-    // ===================================================================
-    // Phase 4b: per-entry batch helpers
-    // ===================================================================
+    // Per-entry batch helpers
 
     // Verify one BatchProof entry. Packs the four FieldT public inputs from
     // the wire-format entry plus the supplied (prevRoot, newRoot) anchors,
@@ -117,8 +111,8 @@ public:
     //
     // Used by BatchVerifier::verifyBatchProof() in the preclaim loop.
     //
-    // Phase 4a routed this through ZkProver::verifyProof (the "integration
-    // shortcut" disclosed in Phase 4a §5). Phase 4b swaps it for the real
+    // An earlier revision routed this through ZkProver::verifyProof as an
+    // integration shortcut; it now uses the real
     // PoseidonCircuit-bound verifier — one function call change in
     // BatchVerifier.cpp.
     static bool

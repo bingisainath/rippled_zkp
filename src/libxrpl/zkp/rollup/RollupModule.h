@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4a — RollupModule: node-startup hook for RollupProver key loading.
+    RollupModule: node-startup hook for RollupProver key loading.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUPMODULE_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUPMODULE_H_INCLUDED
@@ -24,7 +22,7 @@ public:
     //
     // Default key path is /tmp/rippled_rollup_keys -- explicitly
     // separate from ZkProver's /tmp/rippled_zkp_keys to honour the
-    // Phase 1 coexistence boundary.
+    // Coexistence boundary.
     static void
     onStart(std::string const& keyPath = "/tmp/rippled_rollup_keys");
 

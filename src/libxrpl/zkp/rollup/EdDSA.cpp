@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // Native EdDSA over Baby Jubjub. See EdDSA.h for the scheme definition.
 
 #include "EdDSA.h"

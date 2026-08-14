@@ -1,22 +1,18 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // Baby Jubjub R1CS gadgets.
 //
-// Two gadgets:
-//   1. BabyJubjubAddGadget — incomplete twisted Edwards addition.
-//        ~6 multiplicative constraints per call.
+//   1. BabyJubjubAddGadget — incomplete twisted Edwards addition, about 6
+//      multiplicative constraints per call.
 //   2. BabyJubjubMulGadget — fixed-base scalar multiplication using the
-//        prefix-trick to avoid identity-element edge cases.
-//        ~1.6K multiplicative constraints for a 254-bit scalar.
+//      prefix trick to avoid identity-element edge cases, about 1.6K
+//      constraints for a 254-bit scalar.
 //
-// Soundness note (Phase 2b risk): the prefix-trick adds (2^254)·G to the
-// running accumulator at the start, so every intermediate add is between two
-// non-identity points. After processing all 254 scalar bits we subtract the
-// pre-known constant offset out-of-circuit by injecting -((2^254)·G) as the
-// final summand. The off-circuit `BabyJubjub::mul()` matches this convention
-// bit-for-bit (it doesn't actually need the trick, but witness generation
-// reproduces it so the in-circuit and off-circuit values agree).
+// Soundness note: the prefix trick adds (2^254)*G to the accumulator up
+// front, so every intermediate addition is between two non-identity points.
+// After all 254 bits are processed the known constant offset is removed by
+// injecting -((2^254)*G) as the final summand. The off-circuit
+// BabyJubjub::mul() reproduces this convention bit-for-bit — it does not
+// need the trick itself, but witness generation must agree with the
+// in-circuit values.
 
 #ifndef RIPPLE_ZKP_ROLLUP_BABY_JUBJUB_GADGET_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BABY_JUBJUB_GADGET_H_INCLUDED
@@ -100,7 +96,7 @@ public:
     {
         // Per bit: 2 muxes (8 constraints) + 1 add (6) + 1 dbl (6) ≈ 20.
         // Plus 254 booleanity = 254. Plus final correction add.
-        // Conservative figure: 20 * 254 + 254 + 6 = 5340. Phase 2c will
+        // Conservative figure: 20 * 254 + 254 + 6 = 5340. This will
         // measure exactly.
         return 20 * kScalarBits + kScalarBits + 6;
     }

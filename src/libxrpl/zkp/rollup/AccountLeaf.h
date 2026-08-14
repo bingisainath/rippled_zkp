@@ -1,39 +1,32 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// AccountLeaf + SignedRequest: Track 2's state model. Where Track 1 uses
+// note commitments and nullifiers (RollupNote), Track 2 is account-based —
+// one leaf per account, replay protection via an in-leaf nonce, and
+// authorization via EdDSA, so the batch witness never contains a user
+// secret. The sequencer proves; users only sign.
 //
-// AccountLeaf + SignedRequest: the Track 2 (Phase 6, Option A) state model.
+// The hash conventions below are CANONICAL: the native code here and
+// BatchCircuit must implement them bit-for-bit identically.
 //
-// Track 1 uses note commitments and nullifiers (RollupNote). Track 2 is
-// account-based: one leaf per account, replay protection via an in-leaf
-// nonce, authorization via EdDSA — so the batch witness never contains a
-// user secret (the sequencer proves; users only sign).
+// Leaf hash — one Poseidon call. Packing is sound because the circuit
+// range-checks balance and nonce to 64 bits:
 //
-// ============================ Hash conventions ============================
-// These are CANONICAL: the native code here and the Phase 6 BatchCircuit
-// must implement them bit-for-bit identically.
+//   leaf = Poseidon( apk_x , balance + 2^64 * nonce )
 //
-// Leaf hash (one Poseidon call — packing is sound because the circuit
-// range-checks balance and nonce to 64 bits):
+// An unoccupied slot — also the "old leaf" of an account-creation entry —
+// holds the field element 0, NOT Poseidon of anything.
 //
-//   leaf = Poseidon( apk_x ,  balance + 2^64 * nonce )
-//
-// Empty leaf (unoccupied tree slot; the "old leaf" in an account-creation
-// entry): the field element 0 — NOT Poseidon of anything. This matches the
-// convention that a tree slot holds 0 until first written.
-//
-// Request message (two Poseidon calls; txType folds into the packed meta):
+// Request message — two Poseidon calls, with txType folded into the packed
+// meta word:
 //
 //   meta = value + 2^64 * nonce + 2^128 * txType
 //   msg  = Poseidon( Poseidon(from_apk_x, dest) , meta )
 //
-// where `dest` is:
-//   Transfer  : recipient's apk_x
-//   Withdraw  : the 20-byte XRPL AccountID left-padded into a field element
-//   Deposit   : from_apk_x (self — the L1 escrow deposit credits the signer)
-//   NoOp      : 0
+// where dest is the recipient's apk_x for a Transfer, the 20-byte XRPL
+// AccountID left-padded into a field element for a Withdraw, from_apk_x
+// itself for a Deposit (the L1 escrow credits the signer), and 0 for a NoOp.
 //
-// The user signs msg with EdDSA (EdDSA.h). The signature binds every field
-// of the request: any mutation changes msg and breaks EdDSA_verify.
+// The user signs msg with EdDSA (EdDSA.h), which binds every field of the
+// request: any mutation changes msg and breaks verification.
 
 #ifndef RIPPLE_ZKP_ROLLUP_ACCOUNT_LEAF_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ACCOUNT_LEAF_H_INCLUDED
@@ -50,7 +43,6 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
-// ---------------------------------------------------------------------------
 // Withdraw `dest` encoding — CANONICAL.
 //
 // A withdrawal's signed `dest` field is the 20-byte XRPL AccountID left-padded
@@ -74,7 +66,7 @@ accountIdToField(AccountID const& id);
 enum class RequestType : std::uint8_t {
     Deposit = 0,   // L1 escrow -> L2 balance (leaf may be created)
     Withdraw = 1,  // L2 balance -> L1 AccountID
-    Transfer = 2,  // L2 -> L2 (two-leaf update; Phase 6 stretch goal)
+    Transfer = 2,  // L2 -> L2 (two-leaf update)
     NoOp = 3       // padding: no state change
 };
 

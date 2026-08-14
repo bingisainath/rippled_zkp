@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin
-# MSc dissertation: ZK Rollup on XRPL — Phase 5
 #
 # analyse_bench.py — consumes /tmp/rollup_bench.csv emitted by the
 # RollupBench unittest and produces dissertation evaluation artefacts:
@@ -42,7 +40,7 @@ SCENARIOS = {
     "verifier_verifyProof": "Verifier (verifyProof)",
     "onchain_pipeline_n8": "On-chain pipeline (preflight+preclaim, N=8)",
     "baseline_payment_x8": "Baseline (8x Payment)",
-    # Phase 5b additions:
+    # Per-stage additions:
     "l2_pipeline_n8": "L2 pipeline (per-phase, N=8)",
     "merkle_rollup_n8": "Merkle work: rollup batch (N=8)",
     "merkle_baseline_n8": "Merkle work: N independent txs",
@@ -67,7 +65,7 @@ SUCCESS_OUTCOMES = {
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Analyse Phase 5 bench CSV")
+    p = argparse.ArgumentParser(description="Analyse the benchmark CSV")
     p.add_argument("--csv", default="/tmp/rollup_bench.csv")
     p.add_argument("--out", default="docs/phase5_results")
     return p.parse_args()
@@ -85,7 +83,7 @@ def load(csv_path: str) -> pd.DataFrame:
     if missing:
         sys.exit(f"CSV missing columns: {missing}")
 
-    # Phase 5b columns are optional — backfill defaults so a CSV produced by
+    # Per-stage columns are optional — backfill defaults so a CSV produced by
     # the pre-5b suite still analyses cleanly.
     defaults = {
         "phase": "", "n_l2_txs": 0, "merkle_updates": 0,
@@ -137,7 +135,7 @@ def phase5b_markdown(df: pd.DataFrame) -> list[str]:
     def us(x: float) -> str:
         return "n/a" if x != x else f"{x:.0f} us"
 
-    # --- L2 per-phase breakdown -------------------------------------------
+    # L2 per-phase breakdown
     l2 = d[d["scenario"] == "l2_pipeline_n8"]
     if not l2.empty:
         out.append("\n## L2 pipeline — per-phase breakdown (N=8 batch)\n")
@@ -155,7 +153,7 @@ def phase5b_markdown(df: pd.DataFrame) -> list[str]:
             out.append(f"| {phase} | {ms(row['mean'])} | "
                        f"{ms(row['std'])} | {ms(row['mean']/8)} |")
 
-    # --- Merkle-tree work: rollup vs N independent ------------------------
+    # Merkle-tree work: rollup vs N independent
     mr = d[d["scenario"] == "merkle_rollup_n8"]
     mb = d[d["scenario"] == "merkle_baseline_n8"]
     if not mr.empty and not mb.empty:
@@ -186,7 +184,7 @@ def phase5b_markdown(df: pd.DataFrame) -> list[str]:
                    "writes and L1 transactions by **8x** for an 8-entry batch "
                    "while performing the same Merkle compute.\n")
 
-    # --- Live end-to-end L2->L1 -------------------------------------------
+    # Live end-to-end L2->L1
     le = d[d["scenario"] == "live_e2e_total"]
     if not le.empty:
         out.append("\n## Live end-to-end L2->L1 (standalone node, real tesSUCCESS)\n")
@@ -215,7 +213,7 @@ def phase5b_markdown(df: pd.DataFrame) -> list[str]:
 
 
 def write_markdown(summary: pd.DataFrame, df: pd.DataFrame, out_path: Path) -> None:
-    lines = ["# Phase 5 — Benchmark Summary\n"]
+    lines = ["# Benchmark Summary\n"]
     lines.append("Elapsed times in microseconds, aggregated over successful "
                  "runs only. `proof_bytes` is the per-proof or per-batch "
                  "Groth16 byte count; `tx_bytes` is the serialised STTx "
@@ -349,14 +347,14 @@ def write_latex(summary: pd.DataFrame, out_path: Path) -> None:
     lines = [
         r"\begin{table}[t]",
         r"  \centering",
-        r"  \caption{Phase 5 microbenchmarks on \texttt{vma77.scss.tcd.ie} "
+        r"  \caption{Rollup component microbenchmarks "
         r"(Ubuntu 22.04, GCC-13, single core, Groth16 keys cached). "
         r"Prover and verifier times measured directly via "
         r"\texttt{RollupProver}; on-chain pipeline measured end-to-end via "
-        r"\texttt{jtx::Env} along the Phase 4b tampered-rejection path; "
+        r"\texttt{jtx::Env} along the tampered-rejection path; "
         r"baseline is eight individual \texttt{Payment} transactions through "
         r"the same \texttt{Env}.}",
-        r"  \label{tab:phase5-benchmarks}",
+        r"  \label{tab:rollup-benchmarks}",
         r"  \begin{tabular}{lrrr}",
         r"    \toprule",
         r"    Scenario & Mean & Std.\ dev. & Range \\",
@@ -423,7 +421,7 @@ def plot_proof_pipeline(df: pd.DataFrame, out_path: Path) -> None:
     bars = ax.bar(labels, means_ms, yerr=stds_ms, capsize=4,
                   color=["#4C72B0", "#55A868", "#C44E52"])
     ax.set_ylabel("Wall-clock time (ms, mean +/- std.dev.)")
-    ax.set_title("Phase 5: ZK rollup component latencies")
+    ax.set_title("ZK rollup component latencies")
     plt.setp(ax.get_xticklabels(), rotation=10, ha="right")
     for bar, mean in zip(bars, means_ms):
         ax.annotate(f"{mean:.1f} ms",

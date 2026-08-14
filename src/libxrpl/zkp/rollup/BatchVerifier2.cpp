@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 6 — Track 2 transactor (ttBATCH_ROLLUP2 = 62). See BatchVerifier2.h.
+    Track 2 transactor (ttBATCH_ROLLUP2 = 62). See BatchVerifier2.h.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchVerifier2.h>
 #include <libxrpl/zkp/rollup/BatchCircuitProver.h>

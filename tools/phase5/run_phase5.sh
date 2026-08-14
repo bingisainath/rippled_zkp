@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin
-# Phase 5 driver for the slim benchmark suite.
+# Driver for the benchmark suite.
 #
 # Reuses existing build state; assumes `tests=ON` and `xrpld=ON` are
-# already set in CMakeCache.txt (they will be after the first Phase 5
+# already set in CMakeCache.txt (they will be after the first
 # day's debugging — see audit's "build gotchas" section).
 #
 # Usage:
@@ -12,7 +11,7 @@
 set -euo pipefail
 
 NUM_RUNS="${1:-5}"
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 BUILD_DIR="${BUILD_DIR:-$RIPPLED_ROOT/build}"
 CSV_PATH="${ROLLUP_BENCH_CSV:-/tmp/rollup_bench.csv}"
 OUT_DIR="${PHASE5_OUT:-$RIPPLED_ROOT/docs/phase5_results}"
@@ -39,7 +38,7 @@ fi
 
 cd "$RIPPLED_ROOT"
 
-echo "==> Incremental build (picks up Phase 5 test source)..."
+echo "==> Incremental build (picks up the benchmark test source)..."
 cd "$BUILD_DIR"
 cmake --build . -j"$JOBS" --target rippled
 

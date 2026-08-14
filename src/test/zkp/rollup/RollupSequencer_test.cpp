@@ -1,8 +1,5 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 4b — RollupSequencer unit tests.
-// Namespace ripple::test to match the other Phase 1/4a test files.
+// RollupSequencer unit tests.
+// Namespace ripple::test, to match the other rollup test files.
 
 #include <libxrpl/zkp/rollup/BatchProof.h>
 #include <libxrpl/zkp/rollup/RollupNote.h>
@@ -69,7 +66,6 @@ class RollupSequencer_test : public beast::unit_test::suite
         return generateKeyPair(KeyType::ed25519, seed);
     }
 
-    // -----------------------------------------------------------------------
 
     void
     testAutoAssembly()

@@ -30,7 +30,6 @@ using libsnark::merkle_tree_check_read_gadget;
 
 /**
  * Merkle Circuit Implementation
- * ============================================
  * 
  * Based on the Zcash protocol specification (Sapling/Orchard).
  * Implements zero-knowledge proofs for shielded transactions with:
@@ -176,9 +175,7 @@ public:
     std::shared_ptr<libsnark::protoboard<FieldT>> getProtoboard() const;
     size_t getTreeDepth() const;
 
-    // =================================================================
     // UTILITY FUNCTIONS
-    // =================================================================
 
     /**
      * Convert uint256 to bits (little-endian within bytes).

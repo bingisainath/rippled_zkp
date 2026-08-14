@@ -1,15 +1,12 @@
-// Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin.
-// SPDX-License-Identifier: ISC
-//
 // test/zkp/rollup/RollupMerkleTree_test.cpp
 //
-// Phase 3 gate.  Exercises:
+// RollupMerkleTree.  Exercises:
 //   - empty-tree semantics (Poseidon, not all-zeros)
 //   - append + root consistency
 //   - update_leaf changes the root  (NOVEL contribution)
 //   - update_leaf is reversible
 //   - auth path verifies; tampered auth path fails
-//   - N=8 sequential updates produce a deterministic root (Phase 5 invariant)
+//   - N=8 sequential updates produce a deterministic root
 //   - cross-layer consistency: verify() vs the canonical PoseidonHash reference
 //   - thread-safety smoke test for the sequencer's concurrent access pattern
 //
@@ -49,9 +46,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         return u;
     }
 
-    // ------------------------------------------------------------------
     // 1. Empty-tree semantics
-    // ------------------------------------------------------------------
     //
     // The single most common bug carried over from a SHA-256 IMT is to assume
     // empty_hashes[0] == uint256{}.  For Poseidon it must be Poseidon(0, 0).
@@ -85,9 +80,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(tree.root() == tree.emptyHash(4));
     }
 
-    // ------------------------------------------------------------------
     // 2. append() advances the root
-    // ------------------------------------------------------------------
     void
     testAppendAndRoot()
     {
@@ -109,9 +102,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(tree.size() == 2);
     }
 
-    // ------------------------------------------------------------------
     // 3. update_leaf changes the root  --- NOVEL contribution
-    // ------------------------------------------------------------------
     void
     testUpdateLeafChangesRoot()
     {
@@ -130,9 +121,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(tree.size() == 2);
     }
 
-    // ------------------------------------------------------------------
     // 4. update_leaf is reversible
-    // ------------------------------------------------------------------
     //
     // This is the strongest local correctness test: it catches "we forgot to
     // invalidate ancestors" bugs by going there and coming back.
@@ -155,9 +144,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(root_original == root_restored);
     }
 
-    // ------------------------------------------------------------------
     // 5. auth path verifies; tampered cases fail
-    // ------------------------------------------------------------------
     void
     testAuthPathVerification()
     {
@@ -187,9 +174,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(!Tree::verify(leaf(0xBB), tampered, 1, root));
     }
 
-    // ------------------------------------------------------------------
     // 6. update_leaf preserves auth path semantics for OTHER leaves
-    // ------------------------------------------------------------------
     //
     // After updating leaf 0, leaf 1's membership proof must still verify
     // against the *new* root.  This catches stale-cache bugs in adjacent
@@ -218,10 +203,8 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         }
     }
 
-    // ------------------------------------------------------------------
     // 7. Determinism across N=8 sequential operations (the rollup's own
-    //    batch size — Phase 5 sequencer invariant)
-    // ------------------------------------------------------------------
+    //    batch size — a sequencer invariant)
     void
     testBatchUpdateDeterminism()
     {
@@ -251,17 +234,15 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(t1.root() == t2.root());
     }
 
-    // ------------------------------------------------------------------
     // 8. Cross-layer consistency: tree's root agrees with the canonical
     //    PoseidonHash recursion.
-    // ------------------------------------------------------------------
     //
-    // The full circuit-vs-tree test (Test 6 in the research doc) requires
+    // The full circuit-vs-tree test requires
     // PoseidonCircuit to be instantiated — that lives in the integration
     // build.  Here we verify the strictly local property: that the tree's
     // root for a known-good leaf set matches what the off-circuit reference
     // computes top-down.  PoseidonGadget is bit-exact with PoseidonHash
-    // (Phase 2a gate), so any divergence at this layer would be a tree bug,
+    // in PoseidonGadget_test, so any divergence here would be a tree bug,
     // not a hash bug.
     //
     void
@@ -284,9 +265,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(tree.root() == expected_root);
     }
 
-    // ------------------------------------------------------------------
     // 9. Edge cases for the public API
-    // ------------------------------------------------------------------
     void
     testApiEdgeCases()
     {
@@ -315,9 +294,7 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         catch (std::overflow_error const&) { pass(); }
     }
 
-    // ------------------------------------------------------------------
     // 10. clear() resets to empty state.
-    // ------------------------------------------------------------------
     void
     testClear()
     {
@@ -343,11 +320,9 @@ class RollupMerkleTree_test : public beast::unit_test::suite
         BEAST_EXPECT(tree.size() == 2);
     }
 
-    // ------------------------------------------------------------------
     // 11. Concurrency smoke test
-    // ------------------------------------------------------------------
     //
-    // The sequencer (Phase 5) validates RollupTxEntries from worker threads
+    // The sequencer validates RollupTxEntries from worker threads
     // against a shared canonical tree.  We don't claim linearisability — we
     // just confirm that mixed concurrent reads (root) and writes (append)
     // don't corrupt the tree's internal invariants.  After the workers join,
@@ -400,7 +375,7 @@ public:
     void
     run() override
     {
-        // Mirror Phase 2 test setup (PoseidonGadget_test.cpp:38).
+        // Mirror the PoseidonGadget_test setup.
         // Required before any Fr<alt_bn128_pp> operation.
         libff::alt_bn128_pp::init_public_params();
         ripple::zkp::rollup::PoseidonHash::initialize();

@@ -38,12 +38,12 @@ private:
     size_t tree_depth_;
     std::shared_ptr<libsnark::protoboard<FieldT>> pb_;
     
-    // ===== PUBLIC INPUTS (PRIMARY) =====
+    // PUBLIC INPUTS (PRIMARY)
     pb_variable<FieldT> anchor_;                    // Tree root
     pb_variable<FieldT> nullifier_;                 // Spend nullifier
     pb_variable<FieldT> value_commitment_;          // Value hiding commitment
 
-    // ===== PRIVATE INPUTS (AUXILIARY) =====
+    // PRIVATE INPUTS (AUXILIARY)
     // Note components
     pb_variable<FieldT> note_value_;                // Note amount
     pb_variable<FieldT> note_rho_;                  // Nullifier seed
@@ -58,7 +58,7 @@ private:
     pb_variable_array<FieldT> address_bits_;        // Leaf position
     pb_variable<FieldT> read_successful_;           // Always 1
     
-    // ===== BIT DECOMPOSITIONS =====
+    // BIT DECOMPOSITIONS
     pb_variable_array<FieldT> note_value_bits_;     // 64 bits
     pb_variable_array<FieldT> note_rho_bits_;       // 256 bits
     pb_variable_array<FieldT> note_r_bits_;         // 256 bits
@@ -66,7 +66,7 @@ private:
     pb_variable_array<FieldT> a_sk_bits_;           // 256 bits
     pb_variable_array<FieldT> vcm_r_bits_;          // 256 bits
     
-    // ===== SHA256 HASH VARIABLES =====
+    // SHA256 HASH VARIABLES
     std::unique_ptr<digest_variable<FieldT>> note_commitment_hash_;
     std::unique_ptr<digest_variable<FieldT>> nullifier_hash_;
     std::unique_ptr<digest_variable<FieldT>> value_commitment_hash_;
@@ -80,16 +80,16 @@ private:
     std::unique_ptr<digest_variable<FieldT>> value_digest_;
     std::unique_ptr<digest_variable<FieldT>> vcm_r_digest_;
     
-    // ===== SHA256 GADGETS =====
+    // SHA256 GADGETS
     std::unique_ptr<sha256_two_to_one_hash_gadget<FieldT>> note_commit_hasher_;
     std::unique_ptr<sha256_two_to_one_hash_gadget<FieldT>> nullifier_hasher_;
     std::unique_ptr<sha256_two_to_one_hash_gadget<FieldT>> value_commit_hasher_;
     
-    // ===== MERKLE TREE GADGETS =====
+    // MERKLE TREE GADGETS
     std::unique_ptr<merkle_authentication_path_variable<FieldT, sha256_two_to_one_hash_gadget<FieldT>>> auth_path_;
     std::unique_ptr<merkle_tree_check_read_gadget<FieldT, sha256_two_to_one_hash_gadget<FieldT>>> merkle_verifier_;
     
-    // ===== PACKING GADGETS =====
+    // PACKING GADGETS
     std::unique_ptr<packing_gadget<FieldT>> note_value_packer_;
     std::unique_ptr<packing_gadget<FieldT>> note_rho_packer_;
     std::unique_ptr<packing_gadget<FieldT>> note_r_packer_;
@@ -597,7 +597,7 @@ public:
     size_t getTreeDepth() const { return tree_depth_; }
 };
 
-// ===== PUBLIC INTERFACE IMPLEMENTATION =====
+// PUBLIC INTERFACE IMPLEMENTATION
 
 MerkleCircuit::MerkleCircuit(size_t treeDepth) 
     : pImpl_(std::make_unique<Impl>(treeDepth)) {
@@ -658,7 +658,7 @@ size_t MerkleCircuit::getTreeDepth() const {
     return pImpl_->getTreeDepth();
 }
 
-// ===== UTILITY FUNCTIONS =====
+// UTILITY FUNCTIONS
 
 std::vector<bool> convertToLibsnarkBits(const uint256& input) {
     std::vector<bool> bits(256);

@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — BatchCircuit: one circuit, N account transitions.
+// BatchCircuit: one circuit, N account transitions.
 // Run: ./rippled --unittest=ripple.zkp.BatchCircuit
 //
 // Small parameters (depth 4, N<=2) keep the satisfiability tests fast;
@@ -199,7 +196,7 @@ public:
     void
     testHappyPath()
     {
-        testcase("Phase 6 — deposit-then-withdraw batch satisfies the circuit");
+        testcase("deposit-then-withdraw batch satisfies the circuit");
         setupOnce();
 
         auto sc = buildDepositThenWithdraw();
@@ -225,7 +222,7 @@ public:
     void
     testOverdraftUnsatisfiable()
     {
-        testcase("Phase 6 — overdraft (withdraw 200 of 100) is UNSATISFIABLE");
+        testcase("overdraft (withdraw 200 of 100) is UNSATISFIABLE");
         setupOnce();
 
         auto sc = buildDepositThenWithdraw();
@@ -239,7 +236,7 @@ public:
     void
     testForgedSignatureUnsatisfiable()
     {
-        testcase("Phase 6 — tampered signature is UNSATISFIABLE");
+        testcase("tampered signature is UNSATISFIABLE");
         setupOnce();
 
         auto sc = buildDepositThenWithdraw();
@@ -251,7 +248,7 @@ public:
     void
     testSequencerCannotInflateValue()
     {
-        testcase("Phase 6 — sequencer-inflated value is UNSATISFIABLE");
+        testcase("sequencer-inflated value is UNSATISFIABLE");
         setupOnce();
 
         auto sc = buildDepositThenWithdraw();
@@ -263,7 +260,7 @@ public:
     void
     testReplayUnsatisfiable()
     {
-        testcase("Phase 6 — replaying the nonce-0 request is UNSATISFIABLE");
+        testcase("replaying the nonce-0 request is UNSATISFIABLE");
         setupOnce();
 
         auto sc = buildDepositThenWithdraw();
@@ -285,7 +282,7 @@ public:
         BEAST_EXPECT(!runScenario(sc));
     }
 
-    // ---- Phase 7: transfers ------------------------------------------
+    // Transfers
     //
     // Three accounts are created by deposits, then A transfers to B. The
     // `creditIndex` / `creditKey` knobs let a test misdirect the credit while
@@ -372,7 +369,7 @@ public:
     void
     testTransferHappyPath()
     {
-        testcase("Phase 7 — transfer moves value between two leaves");
+        testcase("transfer moves value between two leaves");
         setupOnce();
 
         auto sc = buildTransfer();
@@ -390,7 +387,7 @@ public:
     void
     testTransferOverdraftUnsatisfiable()
     {
-        testcase("Phase 7 — transferring more than the balance is "
+        testcase("transferring more than the balance is "
                  "UNSATISFIABLE");
         setupOnce();
 
@@ -402,7 +399,7 @@ public:
     void
     testTransferCannotBeMisdirected()
     {
-        testcase("Phase 7 — crediting a leaf other than the signed dest is "
+        testcase("crediting a leaf other than the signed dest is "
                  "UNSATISFIABLE");
         setupOnce();
 
@@ -419,7 +416,7 @@ public:
     void
     testNoopPaddingKeepsRoot()
     {
-        testcase("Phase 6 — NoOp padding leaves the root unchanged");
+        testcase("NoOp padding leaves the root unchanged");
         setupOnce();
 
         TestTree tree(kDepth);
@@ -468,7 +465,7 @@ public:
     void
     testProductionSizeConstraintCount()
     {
-        testcase("Phase 6 — constraint budget at N=8, depth=16 (count only)");
+        testcase("constraint budget at N=8, depth=16 (count only)");
         setupOnce();
 
         BatchCircuit c(8, 16);

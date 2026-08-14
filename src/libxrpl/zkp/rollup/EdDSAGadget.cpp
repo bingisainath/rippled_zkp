@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // In-circuit EdDSA-Poseidon verification. See EdDSAGadget.h.
 
 #include "EdDSAGadget.h"
@@ -26,7 +23,7 @@ EdDSAGadget::EdDSAGadget(
     , s_(s)
     , msg_(msg)
 {
-    // ----- challenge chain wires -----
+    // challenge chain wires
     h1_.allocate(pb, FMT(annotation_prefix, " h1"));
     h2_.allocate(pb, FMT(annotation_prefix, " h2"));
     h3_.allocate(pb, FMT(annotation_prefix, " h3"));
@@ -41,7 +38,7 @@ EdDSAGadget::EdDSAGadget(
     pose_h_ = std::make_unique<PoseidonGadget>(
         pb, h3_, msg_, h_, FMT(annotation_prefix, " pose_h"));
 
-    // ----- bit decompositions -----
+    // bit decompositions
     s_bits_.allocate(
         pb, BabyJubjubMulGadget::kScalarBits, FMT(annotation_prefix, " s_bits"));
     h_bits_.allocate(
@@ -52,11 +49,11 @@ EdDSAGadget::EdDSAGadget(
     pack_h_ = std::make_unique<libsnark::packing_gadget<FieldT>>(
         pb, h_bits_, h_, FMT(annotation_prefix, " pack_h"));
 
-    // ----- generator (pinned to constants in constraints) -----
+    // generator (pinned to constants in constraints)
     gx_.allocate(pb, FMT(annotation_prefix, " gx"));
     gy_.allocate(pb, FMT(annotation_prefix, " gy"));
 
-    // ----- scalar muls and the RHS sum -----
+    // scalar muls and the RHS sum
     sg_x_.allocate(pb, FMT(annotation_prefix, " sg_x"));
     sg_y_.allocate(pb, FMT(annotation_prefix, " sg_y"));
     ha_x_.allocate(pb, FMT(annotation_prefix, " ha_x"));
@@ -78,7 +75,7 @@ EdDSAGadget::EdDSAGadget(
         sum_y_,
         FMT(annotation_prefix, " add_R_hA"));
 
-    // ----- on-curve auxiliaries for R -----
+    // on-curve auxiliaries for R
     rx2_.allocate(pb, FMT(annotation_prefix, " rx2"));
     ry2_.allocate(pb, FMT(annotation_prefix, " ry2"));
     rx2ry2_.allocate(pb, FMT(annotation_prefix, " rx2ry2"));

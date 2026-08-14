@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // AccountLeaf + SignedRequest implementations. Hash conventions are
 // specified in AccountLeaf.h and shared verbatim with the BatchCircuit.
 

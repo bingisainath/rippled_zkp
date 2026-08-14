@@ -32,19 +32,6 @@ LedgerFormats::LedgerFormats()
         {sfFlags, soeREQUIRED},
     };
 
-    // add("ShieldedPool", ltSHIELDED_POOL,
-    //     {
-    //         {sfShieldedState, soeREQUIRED},
-    //         {sfCurrentRoot, soeREQUIRED},
-    //         {sfPoolSize, soeREQUIRED},
-    //         {sfNullifier, soeOPTIONAL},
-    //         {sfZKProof, soeOPTIONAL},
-    //         {sfAccount, soeOPTIONAL},
-    //         {sfDestination, soeOPTIONAL},
-    //         {sfPreviousTxnID, soeREQUIRED},
-    //         {sfPreviousTxnLgrSeq, soeREQUIRED}
-    //     });
-
 #pragma push_macro("UNWRAP")
 #undef UNWRAP
 #pragma push_macro("LEDGER_ENTRY")

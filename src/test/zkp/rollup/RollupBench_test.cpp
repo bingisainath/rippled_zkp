@@ -1,10 +1,6 @@
-// Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin
-// MSc dissertation: ZK Rollup on XRPL — Phase 5
-// SPDX-License-Identifier: ISC
+// RollupBench_test.cpp — benchmark suite.
 //
-// RollupBench_test.cpp — Phase 5 benchmark suite (slim version).
-//
-// Scope (per Phase 5 §9.2 of the audit, descoped after API audit):
+// Scope:
 //   1. Measure RollupProver::createProof wall-clock latency over N runs.
 //   2. Measure RollupProver::verifyProof wall-clock latency over N runs.
 //   3. Measure the existing BatchVerifier preflight+preclaim pipeline
@@ -16,13 +12,12 @@
 //      evaluation chapter's tables and figures.
 //
 // What this suite does NOT do:
-//   - Does not chase tesSUCCESS for a real-proof batch. The Phase 4b
-//     audit explicitly defers this; the API audit (Phase 5 day 1)
-//     confirmed that achieving tesSUCCESS requires API changes
+//   - Does not chase tesSUCCESS for a real-proof batch: that requires
+//     API changes
 //     (per-entry prev_root reconciliation between createProof and
 //     verifyEntry) that are out of scope for an evaluation deliverable.
 //   - Does not introduce new production code on the consensus hot path.
-//     Every symbol referenced here is already exported by Phase 1-4b.
+//     Every symbol referenced here is already exported.
 //
 // Run:
 //     export ROLLUP_BENCH_CSV=/tmp/rollup_bench.csv
@@ -72,12 +67,10 @@ using zkp::rollup::RollupTxEntry;
 using zkp::rollup::RollupTxType;
 using zkp::rollup::SEQUENCER_SIG_BYTES;
 
-// ---------------------------------------------------------------------------
 // Bench infrastructure
-// ---------------------------------------------------------------------------
 
 // Wall-clock stopwatch. steady_clock is the only correct choice on a shared
-// VM (Phase 5 audit: NTP can step system_clock backwards during a run).
+// VM, since NTP can step system_clock backwards during a run.
 class Stopwatch
 {
 public:
@@ -104,7 +97,7 @@ private:
 
 // One CSV row. Sparse — fields not relevant to a given scenario stay zero.
 //
-// Phase 5b extension (per-phase L2->L1 decomposition + Merkle-tree work):
+// Per-stage L2->L1 decomposition and Merkle-tree work:
 //   `phase`          sub-stage label within a scenario ("witness",
 //                    "createProof", "serialize", "sign", "total", ...);
 //                    empty for the original coarse-grained scenarios.
@@ -157,7 +150,7 @@ public:
             }
         }
         std::ofstream out(path_, std::ios::out | std::ios::app);
-        // Phase 5b extends the schema with `phase` and the Merkle-work
+        // The schema carries `phase` and the Merkle-work
         // columns. The columns are appended after the original ones so the
         // analyser's subset-based column check stays backward-compatible.
         out << "scenario,run,phase,elapsed_us,proof_bytes,tx_bytes,fee_drops,"
@@ -184,16 +177,14 @@ private:
     bool headerWritten_ = false;
 };
 
-// ---------------------------------------------------------------------------
 // Witness builder — synthetic Lin-style state transition.
 //
 // This is the SAME recipe used by BatchVerifier_test::makeRealSignedBatch
-// (Phase 4b) and PoseidonCircuit_test (Phase 2). All eight authentication
+// and PoseidonCircuit_test. All eight authentication
 // path siblings are the empty-tree hash chain rooted at PoseidonHash::
 // zeroZero(). The "old note" has value=0 (synthetic spend-from-nothing),
 // the "new note" inherits old's ask/apk so the nullifier ties to a fresh
 // nf = Poseidon(ask, rho_old).
-// ---------------------------------------------------------------------------
 
 struct HonestWitness
 {
@@ -239,9 +230,7 @@ buildHonestWitness(std::uint64_t seedOld, std::uint64_t seedNew,
     return w;
 }
 
-// ---------------------------------------------------------------------------
 // The test suite
-// ---------------------------------------------------------------------------
 
 class RollupBench_test : public beast::unit_test::suite
 {
@@ -266,18 +255,16 @@ class RollupBench_test : public beast::unit_test::suite
         return 3u;
     }
 
-    // -----------------------------------------------------------------------
     // Test cases
-    // -----------------------------------------------------------------------
 
     // Bench 1: per-proof generation cost (client-side, off the consensus
-    // path). v2.2 design budget: ~3–5 s per proof at depth=32.
+    // path). Design budget: ~3–5 s per proof at depth=32.
     void
     testProverLatency()
     {
         testcase("RollupProver::createProof latency");
 
-        // First call may take 30–60s for trusted setup. The Phase 4b
+        // First call may take 30–60s for trusted setup. The
         // BatchVerifier suite already initialises in its `run()`; this
         // is idempotent.
         RollupProver::initialize();
@@ -314,8 +301,8 @@ class RollupBench_test : public beast::unit_test::suite
         }
     }
 
-    // Bench 2: per-proof verification cost (consensus hot path). v2.2
-    // design budget: 3 Miller-loop pairings on BN-128, ~30 ms.
+    // Bench 2: per-proof verification cost (consensus hot path). Design
+    // budget: 3 Miller-loop pairings on BN-128, ~30 ms.
     void
     testVerifierLatency()
     {
@@ -487,7 +474,7 @@ class RollupBench_test : public beast::unit_test::suite
     // stages (preflight/preclaim/doApply + ledger close) for a genuinely
     // successful batch are measured on the live standalone node by
     // tools/phase5/bench_live_e2e.sh — the in-process suite cannot reach
-    // tesSUCCESS without API changes (Phase 4b deferral), so we keep the
+    // tesSUCCESS without API changes, so we keep the
     // honest split: L2 phases here, completed L1 flow on the live node.
     void
     testL2PipelinePhases()
@@ -549,7 +536,7 @@ class RollupBench_test : public beast::unit_test::suite
             }
             auto const usProve = tp.elapsedUs();
 
-            // newRoot from a fresh tree (matches Phase 4b recipe).
+            // newRoot from a fresh tree (matches the transactor's recipe).
             {
                 zkp::rollup::RollupMerkleTree tree(kRollupTreeDepth);
                 for (auto const& c : newCommitments)
@@ -694,10 +681,8 @@ class RollupBench_test : public beast::unit_test::suite
         }
     }
 
-    // -----------------------------------------------------------------------
     // Helpers: real-batch construction (mirrors
     // BatchVerifier_test::makeRealSignedBatch, with slot-3 tamper).
-    // -----------------------------------------------------------------------
 
     struct SignedBatch
     {
@@ -757,13 +742,13 @@ class RollupBench_test : public beast::unit_test::suite
             sb.bp.entries.push_back(e);
         }
 
-        // Compute newRoot via a separate tree (matches Phase 4b recipe).
+        // Compute newRoot via a separate tree (matches the transactor).
         zkp::rollup::RollupMerkleTree tree(kRollupTreeDepth);
         for (auto const& c : newCommitments)
             tree.append(c);
         sb.bp.newRoot = tree.root();
 
-        // Tamper slot 3 (Phase 4b convention).
+        // Tamper slot 3.
         constexpr std::size_t targetEntry = 3;
         constexpr std::size_t flipOffset  = 80;
         sb.bp.proof[targetEntry * kEntryProofSlotBytes + flipOffset] ^= 0xFF;

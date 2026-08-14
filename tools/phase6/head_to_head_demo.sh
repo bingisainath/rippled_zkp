@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================
 #  head_to_head_demo.sh — Track 1 (tt=61) vs Track 2 (tt=62), same node
-#  MSc Dissertation, Trinity College Dublin, 2026 — Sainath Annadevara
 #
 #  Boots ONE fresh standalone rippled node with BOTH rollup amendments
 #  (ZKRollup + ZKRollup2) enabled from genesis, then submits an identical
@@ -23,17 +21,16 @@
 #      * blob bytes and Groth16 proof-region bytes
 #
 #  Results print as a side-by-side table and are also written as JSON to
-#  ~/Sainath/demo_runs/head_to_head/results.json for the dashboard to read.
+#  $WORK_DIR/results.json for the dashboard to read.
 #
 #  Usage:  bash tools/phase6/head_to_head_demo.sh
 #
 #  Not using `set -e`: poll-heavy orchestration with explicit `|| fail`
 #  (same rationale as live_xrp_transfer_demo.sh).
-# ============================================================
 set -uo pipefail
 
 # ─── paths & config ─────────────────────────────────────────
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # build/main is the current tree. build/build/Release is a stale Jul-13 binary
 # that predates backed deposits, per-claim attribution and the withdrawal
 # guards — running against it would demo none of them.
@@ -43,7 +40,7 @@ GEN2_TOOL="${GEN2_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob2}"   # Track 2
 
 # Unique sandbox + private pkill token (avoids the 5095/5096/5097 demo nodes
 # and never matches this script's own command line).
-WORK_DIR="${WORK_DIR:-$HOME/Sainath/demo_runs/head_to_head}"
+WORK_DIR="${WORK_DIR:-$HOME/demo_runs/head_to_head}"
 CFG="${WORK_DIR}/rippled.cfg"
 # DB in a fresh, never-before-used dir per run. Standalone rippled resumes any
 # persisted RollupState from its node store even with --start, which would make
@@ -226,7 +223,7 @@ try: print(json.load(sys.stdin)['result']['account_data']['Balance'])
 except Exception: print(0)"
 }
 
-# Phase 1 of the two-phase deposit. apk_x and amount come VERBATIM from QUOTE —
+# Leg 1 of the two-legged deposit. apk_x and amount come VERBATIM from QUOTE —
 # L1 requires the batch's Deposit entry to match a queued claim on BOTH.
 submit_deposit() {  # $1 apk_x  $2 drops  $3 depositor  $4 secret  $5 escrow
     python3 - "$@" <<PYEOF
@@ -357,7 +354,6 @@ clear 2>/dev/null || true
 cat <<BANNER
 ${C_HDR}╔══════════════════════════════════════════════════════════════════╗
 ║  ZK-ROLLUP HEAD-TO-HEAD  ·  Track 1 (8 proofs) vs Track 2 (1 proof) ║
-║  MSc Dissertation · Trinity College Dublin · Sainath Annadevara     ║
 ╚══════════════════════════════════════════════════════════════════╝${C_OFF}
 BANNER
 

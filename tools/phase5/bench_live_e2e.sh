@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Sainath Annadevara — Trinity College Dublin
-# MSc dissertation: ZK Rollup on XRPL — Phase 5b
 #
 # bench_live_e2e.sh — the HONEST end-to-end L2->L1 benchmark.
 #
 # The in-process Beast suite (RollupBench_test.cpp) cannot reach tesSUCCESS
-# for a real-proof batch (Phase 4b deferral), so it measures the L2 phases
+# for a real-proof batch, so it measures the L2 stages
 # and the rejected on-chain path only. This script measures the GENUINE
 # completed flow on a live standalone rippled node — the same path the
 # 11-scenario rollup_demo.sh exercises — where a real batch reaches
@@ -37,7 +35,7 @@
 set -uo pipefail
 
 NUM_RUNS="${1:-3}"
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
 GEN_TOOL="${GEN_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"
 CSV_PATH="${ROLLUP_BENCH_CSV:-/tmp/rollup_bench.csv}"

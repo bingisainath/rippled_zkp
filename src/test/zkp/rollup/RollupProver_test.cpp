@@ -1,20 +1,14 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// The project's go/no-go test.
 //
-// Phase 2d gate. THIS IS THE PROJECT'S GO/NO-GO TEST.
-//
-// What it proves: given the PoseidonCircuit composed in Phase 2c, libsnark's
+// What it proves: given the composed PoseidonCircuit, libsnark's
 // Groth16 backend can:
 //   1. Run trusted-setup and persist (pk, vk) to disk independently of
-//      ZkProver's keys (per v2.2 §13.1 the rollup MUST keep its own keys —
+//      ZkProver's keys (the rollup MUST keep its own keys —
 //      ZkProver loads SHA-256-circuit keys at the same path otherwise).
 //   2. Generate a valid proof for an honest state transition.
 //   3. Reject proofs whose public inputs have been tampered with after
 //      proving (i.e. soundness at the SNARK layer, not just the R1CS layer).
 //   4. Round-trip through proof serialisation (~190 bytes for Groth16/BN-128).
-//
-// If every test below passes, Phase 2 is complete and Phase 3 (RollupMerkleTree
-// with the novel update_leaf()) can proceed.
 //
 // Run: ./rippled --unittest=ripple.zkp.RollupProver
 //
@@ -55,7 +49,7 @@ class RollupProver_test : public beast::unit_test::suite
     static constexpr std::size_t kDepth = 32;
 
     // Same honest witness builder as PoseidonCircuit_test. Duplicated rather
-    // than factored out so each test file is self-contained — Phase 1 lesson
+    // than factored out so each test file is self-contained
     // learned: shared test helpers across files create build-order surprises
     // in the rippled CMake unity build.
     struct HonestWitness
@@ -143,7 +137,7 @@ public:
     {
         testcase("rollup key path does NOT collide with ZkProver");
 
-        // v2.2 §13.1 requirement: rollup keys live in their own file.
+        // Requirement: rollup keys live in their own file.
         // The default path must not be the empty string and must not
         // accidentally point at the existing ZkProver key directory.
         std::string const& p = RollupProver::defaultKeyPath();
@@ -177,7 +171,7 @@ public:
         BEAST_EXPECT(pd.proof_bytes.size() <= 400);
 
         BEAST_EXPECT(pd.anchor == w.prev_root);
-        // Lever #1 (Phase 5): the circuit's second public input carries the
+        // Lever #1: the circuit's second public input carries the
         // NEW COMMITMENT, not the new root — the root binding moved to
         // doApply's deterministic replay. See RollupProver::createProof.
         BEAST_EXPECT(pd.new_anchor == w.new_note.commitment());

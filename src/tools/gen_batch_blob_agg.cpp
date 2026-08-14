@@ -1,6 +1,6 @@
 // gen_batch_blob_agg — Generate a valid BatchRollupAgg sfBatchProof blob.
 //
-// Phase 8: Track 1 + Aggregation, wired onto a live on-chain transactor
+// Track 3 (aggregation), wired onto a live on-chain transactor
 // (ttBATCH_ROLLUP_AGG=64). Reuses gen_batch_blob's exact genesis/note/tree
 // conventions (SAME RollupState tree — this is an alternative proof path
 // for Track 1's existing rollup, not a new one) so a chain of BatchRollup

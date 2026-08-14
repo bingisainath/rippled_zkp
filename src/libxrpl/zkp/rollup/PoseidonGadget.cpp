@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "PoseidonGadget.h"
 #include "PoseidonConstants.h"
@@ -91,7 +89,7 @@ PoseidonGadget::generate_r1cs_constraints()
                              (r >= half_full + kPartialRounds);
         std::size_t const lanes = is_full ? 3 : 1;
 
-        // ----- S-box layer with ARC -----
+        // S-box layer with ARC
         // For each S-boxed lane l, let z_l = state_[r][l] + arc[r*3 + l].
         // Constrain: x2 = z * z;  x4 = x2 * x2;  out = x4 * z.
         for (std::size_t l = 0; l < lanes; ++l)
@@ -114,7 +112,7 @@ PoseidonGadget::generate_r1cs_constraints()
                 FMT(this->annotation_prefix, " sbox_out_%zu_%zu", r, l));
         }
 
-        // ----- Mix layer -----
+        // Mix layer
         // For each output lane k, build the linear combination
         //   sum_j mds[k*3 + j] * lane_after_sbox[j]
         // where lane_after_sbox[j] is sbox_out_[r][j] for S-boxed lanes,

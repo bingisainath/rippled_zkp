@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // BatchCircuit implementation. Statement and conventions: BatchCircuit.h.
 // Gadget composition mirrors PoseidonCircuit.cpp (Impl idiom, mux pattern).
 
@@ -40,9 +37,7 @@ constexpr std::size_t kRangeBits = 64;
 
 }  // anonymous namespace
 
-// ===========================================================================
 // Impl
-// ===========================================================================
 
 class BatchCircuit::Impl
 {
@@ -57,13 +52,13 @@ public:
 
         pb_ = std::make_unique<libsnark::protoboard<FieldT>>();
 
-        // ----- Public inputs MUST be the first allocated wires -----
+        // Public inputs MUST be the first allocated wires
         prev_root_.allocate(*pb_, "prev_root");
         new_root_.allocate(*pb_, "new_root");
         entries_hash_.allocate(*pb_, "entries_hash");
         pb_->set_input_sizes(3);
 
-        // ----- Global chain wires -----
+        // Global chain wires
         roots_.resize(batch_size_ + 1);
         eh_.resize(batch_size_ + 1);
         for (std::size_t i = 0; i <= batch_size_; ++i)
@@ -72,7 +67,7 @@ public:
             eh_[i].allocate(*pb_, FMT("", "eh_%zu", i));
         }
 
-        // ----- Per-entry wires and sub-gadgets -----
+        // Per-entry wires and sub-gadgets
         entries_.resize(batch_size_);
         for (std::size_t i = 0; i < batch_size_; ++i)
             allocateEntry(i);
@@ -128,7 +123,6 @@ public:
         pb_->val(entries_hash_) = pb_->val(eh_[batch_size_]);
     }
 
-    // ------------------------------------------------------------------
     std::unique_ptr<libsnark::protoboard<FieldT>> pb_;
     std::size_t const batch_size_;
     std::size_t const tree_depth_;
@@ -368,7 +362,7 @@ private:
             return FMT("", "e%zu_%s", i, base);
         };
 
-        // ----- 1. Type bits: booleanity, w = t0*t1, forbid Transfer -----
+        // 1. Type bits: booleanity, w = t0*t1, forbid Transfer
         libsnark::generate_boolean_r1cs_constraint<FieldT>(
             *pb_, e.t0, n("t0_bool"));
         libsnark::generate_boolean_r1cs_constraint<FieldT>(
@@ -381,7 +375,7 @@ private:
             libsnark::r1cs_constraint<FieldT>(e.is_xfer - e.t1 + e.w, 1, 0),
             n("is_xfer_def"));
 
-        // ----- 2. is_create semantics; NoOp forces value = 0 -----
+        // 2. is_create semantics; NoOp forces value = 0
         libsnark::generate_boolean_r1cs_constraint<FieldT>(
             *pb_, e.is_create, n("is_create_bool"));
         pb_->add_r1cs_constraint(
@@ -394,7 +388,7 @@ private:
             libsnark::r1cs_constraint<FieldT>(e.w, e.value, 0),
             n("noop_zero_value"));
 
-        // ----- 3. meta = value + 2^64 nonce + 2^128 (t0 + 2 t1) -----
+        // 3. meta = value + 2^64 nonce + 2^128 (t0 + 2 t1)
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
                 e.meta - e.value - twoPow64() * e.nonce -
@@ -403,12 +397,12 @@ private:
                 0),
             n("meta_def"));
 
-        // ----- 4. Message hashes + entries-hash link -----
+        // 4. Message hashes + entries-hash link
         e.g_m1->generate_r1cs_constraints();
         e.g_msg->generate_r1cs_constraints();
         e.g_eh->generate_r1cs_constraints();
 
-        // ----- 5. from_apk on-curve: a*x^2 + y^2 = 1 + d*x^2*y^2 -----
+        // 5. from_apk on-curve: a*x^2 + y^2 = 1 + d*x^2*y^2
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.from_x, e.from_x, e.ax2),
             n("ax_sq"));
@@ -426,10 +420,10 @@ private:
                 0),
             n("a_on_curve"));
 
-        // ----- 6. EdDSA verification -----
+        // 6. EdDSA verification
         e.g_sig->generate_r1cs_constraints();
 
-        // ----- 7. Old leaf, creation mux -----
+        // 7. Old leaf, creation mux
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
                 e.old_packed - e.old_bal - twoPow64() * e.nonce, 1, 0),
@@ -441,7 +435,7 @@ private:
                 e.is_create, e.old_pose, e.old_pose - e.old_used),
             n("old_used_mux"));
 
-        // ----- 8. Balance arithmetic -----
+        // 8. Balance arithmetic
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.t0, e.value, e.dv),
             n("dv_def"));
@@ -477,7 +471,7 @@ private:
                 e.is_xfer, e.to_x - e.dest, 0),
             n("to_x_is_dest"));
 
-        // ----- 9. Range checks (canonical 64-bit packings) -----
+        // 9. Range checks (canonical 64-bit packings)
         e.g_value_range->generate_r1cs_constraints(true);
         e.g_nonce_range->generate_r1cs_constraints(true);
         e.g_old_bal_range->generate_r1cs_constraints(true);
@@ -490,7 +484,7 @@ private:
         e.g_to_nonce_range->generate_r1cs_constraints(true);
         e.g_to_new_bal_range->generate_r1cs_constraints(true);
 
-        // ----- 10. New leaf; NoOp mux (keep the slot unchanged) -----
+        // 10. New leaf; NoOp mux (keep the slot unchanged)
         //   new_packed = new_bal + 2^64 * (nonce + 1 - w)
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
@@ -506,7 +500,7 @@ private:
                 e.w, e.old_used - e.new_pose, e.new_base - e.new_pose),
             n("new_base_mux"));
 
-        // ----- 11. Merkle paths (shared position bits and siblings) -----
+        // 11. Merkle paths (shared position bits and siblings)
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.po[0] - e.old_used, 1, 0),
             n("po_base"));
@@ -542,7 +536,7 @@ private:
             e.g_pn[l]->generate_r1cs_constraints();
         }
 
-        // ----- 12. Recipient leaf hashes and the no-op mux -----
+        // 12. Recipient leaf hashes and the no-op mux
         //   to_old_packed = to_old_bal + 2^64 * to_nonce
         //   to_new_packed = to_new_bal + 2^64 * to_nonce   (SAME nonce:
         //   the recipient did not sign, so their nonce is not consumed)
@@ -581,7 +575,7 @@ private:
                 e.to_base_n - e.new_base),
             n("to_base_n_mux"));
 
-        // ----- 13. Recipient Merkle path: mid -> roots_[i+1] -----
+        // 13. Recipient Merkle path: mid -> roots_[i+1]
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(e.qo[0] - e.to_base_o, 1, 0),
             n("qo_base"));
@@ -623,7 +617,7 @@ private:
             e.g_qn[l]->generate_r1cs_constraints();
         }
 
-        // ----- 14. Root chaining: r_i -> mid -> r_{i+1} -----
+        // 14. Root chaining: r_i -> mid -> r_{i+1}
         pb_->add_r1cs_constraint(
             libsnark::r1cs_constraint<FieldT>(
                 e.po[tree_depth_] - roots_[i], 1, 0),
@@ -806,9 +800,7 @@ private:
     }
 };
 
-// ===========================================================================
 // Public surface
-// ===========================================================================
 
 BatchCircuit::BatchCircuit(std::size_t batch_size, std::size_t tree_depth)
     : impl_(std::make_unique<Impl>(batch_size, tree_depth))

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================
 #  accumulate_xrp_demo.sh — "Watch XRP ACCUMULATE across ZK withdrawal batches"
-#  MSc Dissertation, Trinity College Dublin, 2026 — Sainath Annadevara
 #
 #  Unlike live_xrp_transfer_demo.sh (which boots a FRESH node every run and so
 #  always ends at 30 XRP), this script boots ONE persistent node and leaves it
@@ -21,10 +19,9 @@
 #          bash tools/phase5/withdraw_round.sh 3    # 50 XRP
 #          bash tools/phase5/withdraw_round.sh 4    # 70 XRP
 #  Stop:   pkill -f "rippled.*zkacc_node"
-# ============================================================
 set -uo pipefail
 
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
 GEN_TOOL="${GEN_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"
 
@@ -167,7 +164,6 @@ clear 2>/dev/null || true
 cat <<BANNER
 ${C_HDR}╔══════════════════════════════════════════════════════════════════╗
 ║   ZK-ROLLUP LIVE DEMO — XRP ACCUMULATES across ZK withdrawals     ║
-║   MSc Dissertation · Trinity College Dublin · Sainath Annadevara  ║
 ╚══════════════════════════════════════════════════════════════════╝${C_OFF}
 BANNER
 

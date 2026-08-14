@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 2a gate. This is the most important test file in Phase 2 — if every
+// Poseidon constants and gadget. This is the load-bearing test file — if every
 // vector here matches, the rest of the cryptographic stack is bit-compatible
 // with circomlib / Tornado Cash Nova.
 //
@@ -44,7 +41,7 @@ public:
     void
     testConstantsLoadCorrectly()
     {
-        testcase("Phase 2a — constants table parses and matches anchors");
+        testcase("constants table parses and matches anchors");
         setupOnce();
         auto const& arc = PoseidonHash::debug_arc();
         auto const& mds = PoseidonHash::debug_mds();
@@ -64,7 +61,7 @@ public:
     void
     testReferenceVector_0_0()
     {
-        testcase("Phase 2a — Poseidon(0, 0) matches circomlibjs");
+        testcase("Poseidon(0, 0) matches circomlibjs");
         setupOnce();
         FieldT got = PoseidonHash::hash(FieldT::zero(), FieldT::zero());
         FieldT expected = fromDec(
@@ -75,7 +72,7 @@ public:
     void
     testReferenceVector_1_2()
     {
-        testcase("Phase 2a — Poseidon(1, 2) matches circomlibjs");
+        testcase("Poseidon(1, 2) matches circomlibjs");
         setupOnce();
         FieldT got = PoseidonHash::hash(FieldT::one(), FieldT(2));
         FieldT expected = fromDec(
@@ -86,7 +83,7 @@ public:
     void
     testReferenceVector_3_4()
     {
-        testcase("Phase 2a — Poseidon(3, 4) matches circomlibjs");
+        testcase("Poseidon(3, 4) matches circomlibjs");
         setupOnce();
         FieldT got = PoseidonHash::hash(FieldT(3), FieldT(4));
         FieldT expected = fromDec(
@@ -97,7 +94,7 @@ public:
     void
     testGadgetMatchesOffCircuit()
     {
-        testcase("Phase 2a — gadget output matches off-circuit hash");
+        testcase("gadget output matches off-circuit hash");
         setupOnce();
 
         for (auto const* vec : {
@@ -128,7 +125,7 @@ public:
     void
     testGadgetIsSoundUnderTampering()
     {
-        testcase("Phase 2a — flipping one wire breaks the constraint system");
+        testcase("flipping one wire breaks the constraint system");
         setupOnce();
         libsnark::protoboard<FieldT> pb;
         libsnark::pb_variable<FieldT> in_a, in_b, out;
@@ -149,7 +146,7 @@ public:
     void
     testConstraintCount()
     {
-        testcase("Phase 2a — gadget reports the documented constraint count");
+        testcase("gadget reports the documented constraint count");
         setupOnce();
         libsnark::protoboard<FieldT> pb;
         libsnark::pb_variable<FieldT> in_a, in_b, out;
@@ -173,7 +170,7 @@ public:
     void
     testZeroZeroIsCachedConsistently()
     {
-        testcase("Phase 2a — PoseidonHash::zeroZero() == hash(0, 0)");
+        testcase("PoseidonHash::zeroZero() == hash(0, 0)");
         setupOnce();
         BEAST_EXPECT(
             PoseidonHash::zeroZero() ==
@@ -183,7 +180,7 @@ public:
     void
     testHashUint256Roundtrip()
     {
-        testcase("Phase 2a — hash(uint256, uint256) round-trips through field");
+        testcase("hash(uint256, uint256) round-trips through field");
         setupOnce();
         uint256 a;
         std::memset(a.data(), 0xAB, 32);

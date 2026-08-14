@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — BatchCircuitProver: Groth16 end-to-end over BatchCircuit.
+// BatchCircuitProver: Groth16 end-to-end over BatchCircuit.
 // MANUAL suite (keygen is slow). Run:
 //   ./rippled --unittest=ripple.zkp.BatchCircuitProver
 // Full-size (N=8, depth=16) benchmark additionally gated by env:
@@ -186,7 +183,7 @@ public:
     void
     testKeysRoundTrip()
     {
-        testcase("Phase 6 — batch keys generate, save, and reload");
+        testcase("batch keys generate, save, and reload");
         setupOnce();
 
         BEAST_EXPECT(BatchCircuitProver::isInitialized());
@@ -199,7 +196,7 @@ public:
     void
     testHonestBatchVerifies()
     {
-        testcase("Phase 6 — honest batch proof verifies end-to-end");
+        testcase("honest batch proof verifies end-to-end");
         setupOnce();
 
         auto sc = buildScenario();
@@ -230,7 +227,7 @@ public:
     void
     testTamperedPublicsRejected()
     {
-        testcase("Phase 6 — tampered public inputs are rejected");
+        testcase("tampered public inputs are rejected");
         setupOnce();
 
         auto sc = buildScenario();
@@ -258,7 +255,7 @@ public:
     void
     testTamperedProofBytesRejected()
     {
-        testcase("Phase 6 — bit-flipped proof bytes are rejected");
+        testcase("bit-flipped proof bytes are rejected");
         setupOnce();
 
         auto sc = buildScenario();
@@ -282,7 +279,7 @@ public:
     void
     testUnsatisfiableWitnessRefused()
     {
-        testcase("Phase 6 — prover refuses an overdraft witness");
+        testcase("prover refuses an overdraft witness");
         setupOnce();
 
         auto sc = buildScenario(/*overdraft=*/true);
@@ -294,7 +291,7 @@ public:
     void
     testFullSizeBenchmark()
     {
-        testcase("Phase 6 — FULL-SIZE benchmark (N=8, depth=16)");
+        testcase("FULL-SIZE benchmark (N=8, depth=16)");
 
         if (std::getenv("ROLLUP_BATCH_BENCH") == nullptr)
         {

@@ -7,7 +7,7 @@
 // arbitrary N, building an all-NoOp batch (same construction
 // RollupSequencer2::buildBatch uses for its NoOp padding — see
 // RollupSequencer2.cpp:161,313-333) against a fresh AccountTree. Per
-// [[phase7-benchmarks]], prove time is content-independent (a NoOp-only
+// measurement, prove time is content-independent (a NoOp-only
 // batch costs the same as a full deposit batch of the same N), so this is a
 // legitimate way to measure the circuit's N-scaling without needing N real
 // signed deposits.

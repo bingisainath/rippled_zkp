@@ -1,16 +1,13 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// BatchCircuitProver: Groth16 setup, prove and verify for BatchCircuit
+// (Track 2). One proof per batch of N account transitions.
 //
-// BatchCircuitProver: Groth16 setup / prove / verify for the Phase 6
-// BatchCircuit (Track 2). One proof per batch of N account transitions.
-//
-// Key discipline (v2.2 §13.1, same rule as RollupProver vs ZkProver):
-// this class owns its OWN key pair at its OWN path — never share keys
-// with RollupProver (different circuit) or ZkProver (different hash).
+// Key discipline, the same rule as RollupProver versus ZkProver: this class
+// owns its own key pair at its own path and never shares keys with
+// RollupProver (a different circuit) or ZkProver (a different hash).
 // Default path: /tmp/rippled_rollup_batch_keys_{pk,vk}.
 //
-// The proof statement has exactly 3 public inputs:
-//   (prev_root, new_root, entries_hash)  — see BatchCircuit.h.
+// The statement has exactly three public inputs — prev_root, new_root and
+// entries_hash. See BatchCircuit.h.
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCH_CIRCUIT_PROVER_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCH_CIRCUIT_PROVER_H_INCLUDED

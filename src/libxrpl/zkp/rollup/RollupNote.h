@@ -1,23 +1,18 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// RollupNote: a single user account state in Track 1's rollup, replacing a
+// uint256-keyed note with Baby Jubjub keys.
 //
-// RollupNote: a single user account state in the rollup. Replaces Lin et al.'s
-// uint256-keyed Note with Baby Jubjub keys per v2.2 §1.3 L3.
+//   value : uint64    XRP drops
+//   rho   : FieldT    note nonce, giving uniqueness within the tree
+//   r     : FieldT    blinding factor, kept for hiding even though the
+//                     Poseidon commitment is purely algebraic
+//   ask   : FieldT    spending key, a BJJ scalar
+//   apk   : BjjPoint  apk = [ask]*G
 //
-// Layout:
-//   value : uint64        — XRP drops
-//   rho   : FieldT        — note nonce (uniqueness within the tree)
-//   r     : FieldT        — Pedersen-like blinding (kept for hiding even though
-//                            our Poseidon commitment is purely algebraic)
-//   ask   : FieldT        — spending key (BJJ scalar)
-//   apk   : BjjPoint      — apk = [ask] · G
-//
-// Derived (cached):
-//   cm    : FieldT        — Poseidon(value, rho, r, apk_x)
-//                            We hash apk_x only — apk_y is determined by the curve
-//                            equation (up to sign), so omitting it saves one
-//                            Poseidon call per commitment without losing binding.
-//   nf    : FieldT        — Poseidon(ask, rho)
+// Cached derivations:
+//   cm : Poseidon(value, rho, r, apk_x). Only apk_x is hashed — apk_y is
+//        determined by the curve equation up to sign, so omitting it saves
+//        one Poseidon call per commitment without weakening binding.
+//   nf : Poseidon(ask, rho)
 
 #ifndef RIPPLE_ZKP_ROLLUP_ROLLUP_NOTE_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_ROLLUP_NOTE_H_INCLUDED

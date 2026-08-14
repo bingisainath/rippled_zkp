@@ -1,44 +1,30 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// EdDSAGadget: in-circuit EdDSA-Poseidon verification over Baby Jubjub, the
+// one genuinely new cryptographic component of the Track 2 batch circuit.
+// Composes PoseidonGadget and BabyJubjubMul/AddGadget to verify the scheme
+// defined in EdDSA.h:
 //
-// EdDSAGadget: in-circuit EdDSA-Poseidon verification over Baby Jubjub —
-// the one genuinely new cryptographic component of the Phase 6 batch
-// circuit (Option A). Composes the existing PoseidonGadget and
-// BabyJubjubMul/AddGadget; verifies the scheme defined in EdDSA.h:
+//   h = H(H(H(R.x, R.y), H(A.x, A.y)), m)      4 x PoseidonGadget
+//   [s]*G == R + [h]*A                          2 x BabyJubjubMulGadget
+//                                               1 x BabyJubjubAddGadget
+//   R on-curve: a*x^2 + y^2 = 1 + d*x^2*y^2     3 mul + 1 linear constraint
 //
-//   h = H(H(H(R.x, R.y), H(A.x, A.y)), m)      4 × PoseidonGadget
-//   [s]·G == R + [h]·A                          2 × BabyJubjubMulGadget
-//                                               1 × BabyJubjubAddGadget
-//   R on-curve: a·x² + y² = 1 + d·x²·y²         3 mul + 1 linear constraint
-//
-// Wire interface — all six inputs are allocated by the CALLER (they will be
-// witness variables of the enclosing BatchCircuit; A comes from the account
-// leaf, R/s from the user's signature, m from the entry data):
-//
-//   ax, ay : public key A
-//   rx, ry : signature commitment R
-//   s      : signature response (decomposed to 254 bits in-gadget)
-//   msg    : the signed message field element
-//
-// The gadget has no output wire — it is a pure verification gadget: the
-// constraint system is satisfiable iff (R, s) is a valid signature by A
-// over msg.
-//
-// Constraint budget (measured by EdDSAGadget_test):
-//   2 × BJJ mul  ≈ 2 × 3820
-//   4 × Poseidon =     972
-//   add + packs + pins + curve-check ≈ 20
-//   total        ≈ 8,600   (below the ~11K planning estimate)
+// All six inputs are allocated by the CALLER, since they are witness
+// variables of the enclosing BatchCircuit: ax/ay (public key A), rx/ry
+// (signature commitment R), s (response, decomposed to 254 bits in-gadget),
+// and msg. There is no output wire — the constraint system is satisfiable
+// iff (R, s) is a valid signature by A over msg.
 //
 // Soundness notes:
 //   - h is decomposed to 254 bits with a packing constraint. A malicious
-//     prover could use the alias h+p when h < 2^254 − p (≈ a 24% window):
-//     this gives at most ONE alternative effective challenge per attempt
-//     and does not enable forgery (still requires solving the verification
-//     equation for a challenge the prover does not control).
-//   - s is range-limited to 254 bits, not < ℓ: (R, s+ℓ) may also satisfy
-//     the circuit for the SAME message — benign EdDSA malleability; replay
-//     is excluded by the account nonce, not by signature uniqueness.
+//     prover could use the alias h+p when h < 2^254 - p (roughly a 24%
+//     window). That yields at most one alternative effective challenge per
+//     attempt and does not enable forgery, which would still require
+//     solving the verification equation for a challenge the prover does
+//     not control.
+//   - s is range-limited to 254 bits rather than to < l, so (R, s+l) may
+//     also satisfy the circuit for the SAME message. This is benign EdDSA
+//     malleability; replay is excluded by the account nonce, not by
+//     signature uniqueness.
 
 #ifndef RIPPLE_ZKP_ROLLUP_EDDSA_GADGET_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_EDDSA_GADGET_H_INCLUDED

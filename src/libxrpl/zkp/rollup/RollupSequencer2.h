@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // RollupSequencer2: the off-chain Track 2 sequencer. Maintains the account
 // tree, admits signed user requests, and builds a single-proof batch blob
 // (BatchProof2) ready for submission as a ttBATCH_ROLLUP2 transaction.

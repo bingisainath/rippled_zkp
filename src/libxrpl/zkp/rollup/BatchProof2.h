@@ -1,36 +1,33 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// BatchProof2: the Track 2 (Phase 6, Option A) batch blob. ONE Groth16 proof
-// per batch (vs Track 1's N proofs), account-based entries carrying just
-// enough for the on-chain verifier to (a) recompute the circuit's entriesHash
-// public input and (b) move escrowed XRP in doApply.
+// BatchProof2: Track 2's batch blob. ONE Groth16 proof per batch, against
+// Track 1's N, plus account-based entries carrying just enough for the
+// on-chain verifier to recompute the circuit's entriesHash public input and
+// to move escrowed XRP in doApply.
 //
 // Wire format:
-//   offset  bytes  field
-//   ------  -----  --------------------------------------------
-//      0      4    batchId          uint32 LE
-//      4     32    prevRoot         uint256  (Poseidon root before batch)
-//     36     32    newRoot          uint256  (Poseidon root after batch)
-//     68      4    txCount          uint32 LE  (= entries.size(), padded to N)
-//     72      4    proofSize        uint32 LE  (bytes of the single proof)
-//     76  proofSize  proof          ONE Groth16 proof (~137 B)
-//    ...  N*101  entries[]          Track2 account entries (101 B each)
-//    +64          sequencerSig      Ed25519 over computeBatchHash()
+//   offset  bytes      field
+//   ------  -----      -------------------------------------------
+//      0      4        batchId     uint32 LE
+//      4     32        prevRoot    uint256, Poseidon root before batch
+//     36     32        newRoot     uint256, Poseidon root after batch
+//     68      4        txCount     uint32 LE, = entries.size(), padded to N
+//     72      4        proofSize   uint32 LE, bytes of the single proof
+//     76  proofSize    proof       ONE Groth16 proof (~137 B)
+//    ...  N*101        entries[]   account entries, 101 B each
+//    +64               sequencerSig  Ed25519 over computeBatchHash()
 //
-//   Total N=8: 76 + 137 + 8*101 + 64 = 1085 B  (vs Track 1's 2420 B).
+//   Total at N=8: 76 + 137 + 8*101 + 64 = 1085 B, against Track 1's 2420 B.
 //
-// Track2 entry (101 B):
-//   from_apk_x  32 B  signer public key x-coord (field element as uint256)
-//   dest        32 B  message destination field (recipient apk_x, or the
-//                     AccountID packed into a field for a withdrawal)
+// Entry layout (101 B):
+//   from_apk_x  32 B  signer public key x-coord, field element as uint256
+//   dest        32 B  message destination: recipient apk_x, or an AccountID
+//                     packed into a field for a withdrawal
 //   value        8 B  drops (LE)
 //   nonce        8 B  signer's current leaf nonce (LE)
 //   txType       1 B  RequestType {Deposit=0, Withdraw=1, Transfer=2, NoOp=3}
-//   destAccount 20 B  XRPL AccountID payout target (withdrawals; zeros else)
+//   destAccount 20 B  XRPL AccountID payout target; zeros except withdrawals
 //
 // The signature (R, s) is NOT on the wire — it is consumed inside the proof
-// witness. The proof IS the evidence a valid signature existed.
+// witness. The proof IS the evidence that a valid signature existed.
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCHPROOF2_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCHPROOF2_H_INCLUDED

@@ -1,9 +1,5 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// BatchCircuitProver implementation. Mirrors RollupProver's key handling
-// (load-or-generate with a constraint-count staleness check) for the
-// Phase 6 BatchCircuit.
+// BatchCircuitProver implementation. Mirrors RollupProver's key handling —
+// load-or-generate with a constraint-count staleness check.
 
 #include "BatchCircuitProver.h"
 

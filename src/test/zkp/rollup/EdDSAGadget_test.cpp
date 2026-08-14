@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — EdDSA-Poseidon over Baby Jubjub, native + in-circuit.
+// EdDSA-Poseidon over Baby Jubjub, native + in-circuit.
 // Run: ./rippled --unittest=ripple.zkp.EdDSAGadget
 
 #include "../../../libxrpl/zkp/rollup/EdDSA.h"
@@ -81,7 +78,7 @@ public:
     void
     testNativeSignVerify()
     {
-        testcase("Phase 6 — native sign/verify round-trip");
+        testcase("native sign/verify round-trip");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -98,7 +95,7 @@ public:
     void
     testNativeDeterministic()
     {
-        testcase("Phase 6 — deterministic signatures (same key+msg => same sig)");
+        testcase("deterministic signatures (same key+msg => same sig)");
         setupOnce();
 
         auto const s1 = EdDSA::sign(testKey(), testMsg());
@@ -109,7 +106,7 @@ public:
     void
     testNativeRejectsTamperedMessage()
     {
-        testcase("Phase 6 — native verify rejects a tampered message");
+        testcase("native verify rejects a tampered message");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -122,7 +119,7 @@ public:
     void
     testNativeRejectsWrongKey()
     {
-        testcase("Phase 6 — native verify rejects a different public key");
+        testcase("native verify rejects a different public key");
         setupOnce();
 
         auto const sig = EdDSA::sign(testKey(), testMsg());
@@ -135,7 +132,7 @@ public:
     void
     testNativeRejectsTamperedS()
     {
-        testcase("Phase 6 — native verify rejects a tampered s");
+        testcase("native verify rejects a tampered s");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -149,7 +146,7 @@ public:
     void
     testGadgetAcceptsValidSignature()
     {
-        testcase("Phase 6 — circuit satisfied by a valid signature");
+        testcase("circuit satisfied by a valid signature");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -167,7 +164,7 @@ public:
     void
     testGadgetRejectsTamperedS()
     {
-        testcase("Phase 6 — circuit UNSATISFIED for a forged s");
+        testcase("circuit UNSATISFIED for a forged s");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -182,7 +179,7 @@ public:
     void
     testGadgetRejectsTamperedMessage()
     {
-        testcase("Phase 6 — circuit UNSATISFIED for a tampered message");
+        testcase("circuit UNSATISFIED for a tampered message");
         setupOnce();
 
         FieldT const ask = testKey();
@@ -195,7 +192,7 @@ public:
     void
     testGadgetRejectsWrongKey()
     {
-        testcase("Phase 6 — circuit UNSATISFIED for the wrong public key");
+        testcase("circuit UNSATISFIED for the wrong public key");
         setupOnce();
 
         auto const sig = EdDSA::sign(testKey(), testMsg());
@@ -208,7 +205,7 @@ public:
     void
     testGadgetRejectsOffCurveR()
     {
-        testcase("Phase 6 — circuit UNSATISFIED for an off-curve R");
+        testcase("circuit UNSATISFIED for an off-curve R");
         setupOnce();
 
         FieldT const ask = testKey();

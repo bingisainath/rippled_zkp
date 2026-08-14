@@ -1,47 +1,30 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// PoseidonCircuit: the per-note R1CS proving circuit used by Track 1.
 //
-// PoseidonCircuit: the per-note R1CS proving circuit for Phase 2.
+// Public inputs:
+//   anchor       Merkle root before this leaf is updated
+//   new_anchor   root after the update
+//   nullifier    nf = Poseidon(ask, rho)
+//   value_pub    the deposited or withdrawn amount. Unhidden: the threat
+//                model for the rollup is integrity, not confidentiality.
+//   is_withdraw  value-conservation flag, set by the on-chain verifier from
+//                the entry's txType. 1 => spend, with value == value_pub
+//                enforced so a note cannot be over-withdrawn; 0 => deposit,
+//                minted against escrowed L1 funds.
 //
-// Public inputs (primary):
-//   - anchor      : prevRoot of the Merkle tree
-//   - new_anchor  : root after this leaf has been updated
-//   - nullifier   : nf = Poseidon(ask, rho)
-//   - value_pub   : the deposited / withdrawn amount (unhidden in the rollup
-//                   prototype — the dissertation's threat model is integrity,
-//                   not privacy; per v2.2 §1.3, privacy is out of scope for
-//                   the rollup, in scope only for the existing ZkDeposit pool).
-//   - is_withdraw : value-conservation flag. 1 => spend (value == value_pub
-//                   enforced: cannot withdraw more than the spent note holds);
-//                   0 => deposit (value minted from an escrowed L1 deposit).
-//                   Set by the on-chain verifier from the entry's txType.
+// Private inputs: value, rho, r, the spending key ask as a 254-bit
+// decomposition, apk_x/apk_y from the in-circuit scalar multiplication, the
+// leaf position bits, the auth-path siblings, and the new leaf commitment.
 //
-// Private inputs (auxiliary):
-//   - value (matches value_pub via constraint)
-//   - rho, r
-//   - ask (BJJ scalar) as 254-bit decomposition
-//   - apk_x, apk_y (computed by the in-circuit BJJ scalar mul)
-//   - leaf position bits (for auth path direction)
-//   - auth path siblings × tree_depth
-//   - new_leaf commitment (same value, new rho/r — supplied by the witness)
+// Constraints proved:
+//   1. apk = [ask]*G_J
+//   2. cm  = Poseidon(value, rho, r, apk_x)
+//   3. nf  = Poseidon(ask, rho)
+//   4. cm is at leaf_pos in the tree rooted at anchor, via a Poseidon path
+//   5. cm' — the new commitment for the same account — sits at the same
+//      leaf_pos and hashes up to new_anchor along the same path
 //
-// Constraints proved (per research doc §2.3 sub-phase 2c):
-//   1. apk = [ask] · G_J                 — BabyJubjubMulGadget
-//   2. cm  = Poseidon(value, rho, r, apk_x)  — three PoseidonGadgets
-//   3. nf  = Poseidon(ask, rho)          — one PoseidonGadget
-//   4. cm  is at position `leaf_pos` in the Merkle tree rooted at `anchor`
-//      via Poseidon auth path                 — tree_depth PoseidonGadgets
-//   5. cm' (new commitment for same account) sits at the same `leaf_pos` and
-//      hashes up to `new_anchor` via the same auth path
-//                                            — another tree_depth PoseidonGadgets
-//
-// Constraint budget at depth=32 (single note slot):
-//   1×BJJ_mul (~5300) + 4×Poseidon (~972) + 32×Poseidon (~7776) ×2 paths
-//   ≈ 5300 + 972 + 15552 ≈ 21800   <-- single-note worst case
-// At N=1 the test target is therefore ~9–22K depending on whether we
-// include both prevRoot and newRoot path checks. The doc cites ~9.2K for
-// the prevRoot-only single-note circuit; we include both paths for full
-// rollup soundness (per v2.2 §13.1 entry 5 "correct leaf update to newRoot").
+// Both the prevRoot and newRoot path checks are included, rather than
+// prevRoot alone, so the circuit also proves the leaf update itself.
 
 #ifndef RIPPLE_ZKP_ROLLUP_POSEIDON_CIRCUIT_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_POSEIDON_CIRCUIT_H_INCLUDED
@@ -94,8 +77,8 @@ public:
         bool is_withdraw = false);
 
     // Returns the Poseidon-canonical empty root for a tree of `depth`. This
-    // is the value that Phase 4a will substitute for `kGenesisRollupRoot()`
-    // in `RollupState.h` (per the Phase 1 closeout, §9.2).
+    // is the value substituted for `kGenesisRollupRoot()` in
+    // `RollupState.h`.
     static FieldT
     empty_tree_root(std::size_t depth);
 

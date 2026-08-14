@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — Track 2 end-to-end sequencer pipeline (no rippled Env):
+// Track 2 end-to-end sequencer pipeline (no rippled Env):
 // user signs -> sequencer builds batch -> real Groth16 proof -> verifyBatch,
 // with the crucial circuit/tree/blob root-consistency assertions.
 //
@@ -58,7 +55,7 @@ public:
     void
     testGenesisRootConsistency()
     {
-        testcase("Phase 6 — empty sequencer root == RollupState2 genesis root");
+        testcase("empty sequencer root == RollupState2 genesis root");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -68,7 +65,7 @@ public:
     void
     testBuildBatchAndVerify()
     {
-        testcase("Phase 6 — sequencer builds a batch that verifyBatch accepts");
+        testcase("sequencer builds a batch that verifyBatch accepts");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -123,7 +120,7 @@ public:
     void
     testTamperedNewRootRejected()
     {
-        testcase("Phase 6 — verifyBatch rejects a tampered newRoot");
+        testcase("verifyBatch rejects a tampered newRoot");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -150,7 +147,7 @@ public:
     void
     testReplayedNonceRejectedByAdmission()
     {
-        testcase("Phase 6 — sequencer admission rejects a stale nonce");
+        testcase("sequencer admission rejects a stale nonce");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -176,7 +173,7 @@ public:
     void
     testSecondBatchChains()
     {
-        testcase("Phase 6 — second batch chains from the first root");
+        testcase("second batch chains from the first root");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -239,7 +236,7 @@ public:
     void
     testWithdrawDestinationMismatchRejected()
     {
-        testcase("Phase 6 — withdrawal dest/destination mismatch rejected");
+        testcase("withdrawal dest/destination mismatch rejected");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);
@@ -306,7 +303,7 @@ public:
     void
     testTransferRejectedAtAdmission()
     {
-        testcase("Phase 7 — Transfer to an unknown recipient is rejected");
+        testcase("Transfer to an unknown recipient is rejected");
         setupOnce();
 
         // Transfer is no longer reserved. What IS still rejected is a
@@ -327,7 +324,7 @@ public:
     void
     testTransferBetweenFundedAccounts()
     {
-        testcase("Phase 7 — transfer between two funded leaves is provable");
+        testcase("transfer between two funded leaves is provable");
         setupOnce();
 
         RollupSequencer2 seq(kDepth);

@@ -1,6 +1,5 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 8 — BatchVerifierAgg (class BatchRollupAgg).
+    BatchVerifierAgg (class BatchRollupAgg).
 
     preflight and doApply are structurally identical to BatchVerifier.cpp's
     BatchRollup — same field set, same wire struct (BatchProof), same
@@ -9,7 +8,6 @@
     ProofAggregator::verifyAggregate() call instead of BatchRollup's 8x
     RollupProver::verifyEntry loop.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchVerifierAgg.h>
 #include <libxrpl/zkp/rollup/BatchProof.h>

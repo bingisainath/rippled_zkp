@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================
 #  live_xrp_transfer_demo.sh — "Watch real XRP land via a ZK proof"
-#  MSc Dissertation, Trinity College Dublin, 2026 — Sainath Annadevara
 #
 #  A focused, narration-friendly LIVE demo for a viva. It shows, on a real
 #  standalone rippled node, that a zero-knowledge ROLLUP WITHDRAWAL moves
@@ -20,11 +18,10 @@
 #
 #  NOTE: not using `set -e` — this is a poll-heavy orchestration script with
 #  explicit `|| fail` on every critical step (same rationale as bench_live_e2e).
-# ============================================================
 set -uo pipefail
 
 # ─── paths & config ─────────────────────────────────────────
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
 GEN_TOOL="${GEN_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"
 
@@ -192,7 +189,6 @@ clear 2>/dev/null || true
 cat <<BANNER
 ${C_HDR}╔══════════════════════════════════════════════════════════════════╗
 ║   ZK-ROLLUP LIVE DEMO — real XRP moved by a zero-knowledge proof  ║
-║   MSc Dissertation · Trinity College Dublin · Sainath Bingi  ║
 ╚══════════════════════════════════════════════════════════════════╝${C_OFF}
 BANNER
 

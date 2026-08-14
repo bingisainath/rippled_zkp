@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "ProofAggregator.h"
 
@@ -188,9 +186,7 @@ syntheticDivide(std::vector<AggFr> const& c, AggFr const& z)
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
 // AggSRS
-// ---------------------------------------------------------------------------
 
 AggSRS
 AggSRS::generate(std::size_t n)
@@ -266,7 +262,6 @@ AggSRS::load(std::string const& path)
     return srs;
 }
 
-// ---------------------------------------------------------------------------
 // AggregateProof (de)serialisation
 //
 // Custom fixed-width BINARY encoding — not libff's text-mode operator<</>>.
@@ -282,7 +277,6 @@ AggSRS::load(std::string const& path)
 // coordinates (not compressed) to avoid re-deriving Y via sqrt() on
 // read — the extra bytes that costs are negligible next to the GT savings,
 // which is where nearly all the size lives.
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -506,9 +500,7 @@ AggregateProof::deserialize(std::vector<unsigned char> const& bytes)
     return out;
 }
 
-// ---------------------------------------------------------------------------
 // ProofAggregator — SRS lifecycle
-// ---------------------------------------------------------------------------
 
 std::shared_ptr<AggSRS> ProofAggregator::srs_;
 bool ProofAggregator::initialised_ = false;
@@ -607,7 +599,7 @@ ProofAggregator::aggregate(
 
     // Initial commitments on the ORIGINAL (unscaled) A, B, C — bootstraps r
     // via Fiat-Shamir before any rescaling. T_AB/U_AB stay identical whether
-    // computed pre- or post-rescaling (see memory note); T_C/U_C = CMs(v1,v2;C)
+    // computed pre- or post-rescaling; T_C/U_C = CMs(v1,v2;C)
     // is MIPP's equivalent initial commitment.
     AggGT const T_AB = ipp(A, v1) * ipp(w1, B);
     AggGT const U_AB = ipp(A, v2) * ipp(w2, B);
@@ -698,9 +690,8 @@ ProofAggregator::aggregate(
         std::vector<AggFr> R_lo(curR.begin(), curR.begin() + mp);
         std::vector<AggFr> R_hi(curR.begin() + mp, curR.begin() + m);
 
-        // TIPP cross terms — see the memory note for the index derivation
-        // (zero-padded CMd expands to cross pairings between the "hi" half
-        // of one vector and the "lo" half of the OTHER).
+        // TIPP cross terms: a zero-padded CMd expands to cross pairings
+        // between the "hi" half of one vector and the "lo" half of the OTHER.
         AggGT const zL = ipp(A_hi, B_lo);
         AggGT const zR = ipp(A_lo, B_hi);
         AggGT const tL = ipp(A_hi, V1_lo) * ipp(W1_hi, B_lo);
@@ -774,7 +765,7 @@ ProofAggregator::aggregate(
         m = mp;
     }
 
-    // ---- KZG openings for the final commitment keys --------------------
+    // KZG openings for the final commitment keys
     // v1f/v2f/w1f/w2f are free — already computed by the fold loop above.
     // Opening proofs certify each is correctly derived, so the verifier
     // trusts them via O(1)-ish pairing checks instead of an O(N) SRS
@@ -1018,7 +1009,7 @@ ProofAggregator::verifyAggregate(
     batch.addTerm(agg.finalC, v2f, rho6);
     batch.addTarget(Uc_C, rho6);
 
-    // ---- KZG opening checks for v1f, v2f, w1f, w2f ---------------------
+    // KZG opening checks for v1f, v2f, w1f, w2f
     // Recompute the KZG challenge z exactly as aggregate() derived it, and
     // y_v=f_v(z), y_w=f_w(z) — O(log N) via evalBinomialProduct, not the
     // O(N) expandBinomialProduct used to actually BUILD the polynomial

@@ -1,37 +1,29 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
+// EdDSA over Baby Jubjub with a Poseidon challenge hash — the native,
+// off-circuit half of Track 2's authorization scheme. Shaped after
+// circomlib's EdDSAPoseidonVerifier, adapted to a 2-to-1 Poseidon.
 //
-// EdDSA over Baby Jubjub with a Poseidon challenge hash — the off-circuit
-// (native) half of Phase 6's batch-circuit authorization scheme.
-//
-// Scheme (circomlib EdDSAPoseidonVerifier-shaped, adapted to our 2-to-1
-// Poseidon):
-//
-//   keygen :  A = [a]·G                     a = ask mod ℓ, a ≠ 0
-//   sign   :  r = H(ask, m) mod ℓ           deterministic nonce (RFC-8032 style)
-//             R = [r]·G
+//   keygen :  A = [a]*G                     a = ask mod l, a != 0
+//   sign   :  r = H(ask, m) mod l           deterministic nonce
+//             R = [r]*G
 //             h = challenge(R, A, m)
-//             s = (r + h·a) mod ℓ
-//   verify :  [s]·G == R + [h]·A            and R on-curve
-//
-// where the challenge is chained through the 2-to-1 Poseidon:
+//             s = (r + h*a) mod l
+//   verify :  [s]*G == R + [h]*A            and R on-curve
 //
 //   challenge(R, A, m) = H( H( H(R.x, R.y), H(A.x, A.y) ), m )
 //
-// ℓ is the prime order of the BJJ subgroup (≈ 2^250.99). Scalar arithmetic
-// mod ℓ is done with boost::multiprecision (FieldT is mod p, not mod ℓ).
+// l is the prime order of the BJJ subgroup (about 2^250.99). Scalar
+// arithmetic mod l uses boost::multiprecision, since FieldT is mod p.
 //
-// Note on h: the verifier multiplies A by the FULL (unreduced) 254-bit h.
-// This is consistent with the signer using h mod ℓ in s, because A has
-// order ℓ: [h]·A == [h mod ℓ]·A. The in-circuit verifier (EdDSAGadget)
-// uses the same convention.
+// The verifier multiplies A by the FULL unreduced 254-bit h. This agrees
+// with the signer using h mod l in s because A has order l, so
+// [h]*A == [h mod l]*A. EdDSAGadget uses the same convention.
 //
-// Known prototype caveats (documented, standard for EdDSA):
-//   - s is range-limited to 254 bits, not < ℓ: a signature (R, s+ℓ) for the
-//     SAME message may also verify (classic EdDSA malleability). This never
-//     allows forging a signature on a NEW message.
-//   - No subgroup (cofactor-8) check on R; the challenge binds R so small-
-//     subgroup components cannot change the signed message.
+// Known prototype caveats, both standard for EdDSA:
+//   - s is range-limited to 254 bits rather than to < l, so (R, s+l) may
+//     verify for the SAME message. This never allows forging a signature
+//     on a NEW message.
+//   - No cofactor-8 subgroup check on R; the challenge binds R, so
+//     small-subgroup components cannot change the signed message.
 
 #ifndef RIPPLE_ZKP_ROLLUP_EDDSA_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_EDDSA_H_INCLUDED

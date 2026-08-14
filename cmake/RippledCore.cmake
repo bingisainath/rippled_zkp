@@ -219,8 +219,8 @@ if(xrpld)
   endif()
 endif()
 
-# ── gen_batch_blob — generates a valid BatchRollup sfBatchProof blob ─────────
-# Used by rollup_demo.sh to produce a tesSUCCESS submission against the live
+# gen_batch_blob — generates a valid BatchRollup sfBatchProof blob
+# Used by the demo scripts to produce a tesSUCCESS submission against a live
 # standalone node. Only built when xrpld is enabled (same link deps as rippled).
 if(xrpld)
   add_executable(gen_batch_blob
@@ -243,7 +243,7 @@ if(xrpld)
   target_link_options(gen_batch_blob PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
 
-  # ── gen_batch_blob2 — Track 2 (Option A) single-proof batch blob ──────────
+  # gen_batch_blob2 — Track 2 single-proof batch blob
   add_executable(gen_batch_blob2
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/gen_batch_blob2.cpp
   )
@@ -264,7 +264,7 @@ if(xrpld)
   target_link_options(gen_batch_blob2 PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
 
-  # ── bench_proof_aggregator — Track 1 SnarkPack-style aggregation bench ────
+  # bench_proof_aggregator — Track 1 SnarkPack-style aggregation bench
   add_executable(bench_proof_aggregator
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/bench_proof_aggregator.cpp
   )
@@ -281,7 +281,7 @@ if(xrpld)
   target_link_options(bench_proof_aggregator PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
 
-  # ── bench_track2_scale — Track 2 batch circuit at N != 8 ──────────────────
+  # bench_track2_scale — Track 2 batch circuit at N != 8
   add_executable(bench_track2_scale
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/bench_track2_scale.cpp
   )
@@ -298,7 +298,7 @@ if(xrpld)
   target_link_options(bench_track2_scale PRIVATE
     -Wl,--unresolved-symbols=ignore-all)
 
-  # ── gen_batch_blob_agg — Track 1 + Aggregation (Phase 8) batch blob ───────
+  # gen_batch_blob_agg — Track 3 (aggregated) batch blob
   add_executable(gen_batch_blob_agg
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/gen_batch_blob_agg.cpp
   )

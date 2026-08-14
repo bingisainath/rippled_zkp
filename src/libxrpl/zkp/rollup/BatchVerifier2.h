@@ -1,18 +1,15 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Copyright (c) 2026 Trinity College Dublin (MSc dissertation).
 
-    Phase 6 — Track 2 (Option A) transactor: ttBATCH_ROLLUP2 = 62.
+    BatchVerifier2: on-chain transactor for ttBATCH_ROLLUP2 = 62, Track 2's
+    proof path and the head-to-head counterpart of BatchRollup.
 
-    The head-to-head counterpart of BatchRollup (Track 1). Where Track 1
-    verifies N independent proofs and replays the tree on-chain, Track 2
-    verifies ONE monolithic proof whose statement already binds the whole
-    prevRoot -> newRoot transition — so preclaim is O(1) in batch size and
-    doApply does NOT replay the tree (the tree lives off-chain with the
-    sequencer, rebuildable from the published entries).
+    Where Track 1 verifies N independent proofs and replays the tree
+    on-chain, Track 2 verifies ONE monolithic proof whose statement already
+    binds the whole prevRoot -> newRoot transition. preclaim is therefore
+    O(1) in batch size, and doApply does not replay the tree — it lives
+    off-chain with the sequencer, rebuildable from the published entries.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCHVERIFIER2_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCHVERIFIER2_H_INCLUDED

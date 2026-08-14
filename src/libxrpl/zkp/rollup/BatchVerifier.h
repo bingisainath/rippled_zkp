@@ -1,23 +1,22 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Copyright (c) 2026 Trinity College Dublin (MSc dissertation).
 
-    Phase 1 — Foundation: BatchVerifier transactor declaration.
+    BatchRollup: on-chain transactor for ttBATCH_ROLLUP, Track 1's proof
+    path. A batch carries N per-entry Groth16 proofs, each verified
+    independently, and the tree transition is replayed on-chain.
 
-    This is the SKELETON version for Phase 1 — the real Groth16
-    verification is stubbed by verifyProofMock() (always true). Phase 4a
-    replaces it with RollupProver::verifyProof() (Phase 2 deliverable) and
-    adds the real preclaim nullifier-chain walk and doApply tree/pool
-    mutation.
-
-    v2.2 state machine (Fig 11):
-       PREFLIGHT  →  feature flag / fields / sig / txCount / batchId > 0
-       PRECLAIM   →  SLE read / prevRoot check / batchId monotonicity /
-                     verifyProofMock()
-       DO_APPLY   →  update RollupState SLE (counter, root)
+       preflight  feature flag, field presence, sequencer signature,
+                  txCount, batchId > 0, and prover/module readiness
+       preclaim   read the RollupState SLE; check prevRoot chains from the
+                  last batch and batchId is strictly next; reject duplicate
+                  nullifiers within the batch and any already spent on
+                  chain; check pool solvency for withdrawals; then verify
+                  the N Groth16 proofs. The cheap policy checks run first
+                  so a bad batch fails before any pairing cost.
+       doApply    replay update_leaf() over the batch entries, require the
+                  recomputed root to equal the declared newRoot, insert the
+                  nullifiers, and update the RollupState counter and root
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCHVERIFIER_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCHVERIFIER_H_INCLUDED
@@ -52,79 +51,59 @@ public:
     }
 
     /**
-     * Phase 1 preflight — stateless checks only. No ledger access.
+     * Stateless checks only; no ledger access.
      *
-     *   1. featureZKRollup enabled?
-     *   2. preflight1(ctx) — standard rippled prerequisites (fee, sequence).
-     *   3. Required fields present: sfBatchProof, sfBatchId, sfPrevRoot,
-     *      sfRollupRoot, sfTxCount, sfSequencerPubKey
-     *   4. sfBatchProof blob size in (0, MAX_BATCH_BLOB_BYTES]
-     *   5. BatchProof::deserialize() succeeds
-     *   6. Deserialized BatchProof::isWellFormed() returns true
-     *   7. sfTxCount (on STTx) == deserialized txCount (in blob) == entries.size()
-     *   8. sfBatchId matches blob batchId and is > 0
-     *   9. sfPrevRoot on STTx matches blob prevRoot
-     *  10. sfRollupRoot on STTx matches blob newRoot
-     *  11. Ed25519(sfSequencerPubKey, computeBatchHash(), blob.sequencerSig) verifies
-     *  12. preflight2(ctx) — standard rippled signature / structure checks.
+     * Requires featureZKRollup, the standard rippled prerequisites, and all
+     * of sfBatchProof, sfBatchId, sfPrevRoot, sfRollupRoot, sfTxCount and
+     * sfSequencerPubKey. The blob must be within MAX_BATCH_BLOB_BYTES,
+     * deserialize, and be well-formed. Every field duplicated between the
+     * STTx and the blob must agree — txCount against entries.size(),
+     * batchId (which must be > 0), prevRoot, and newRoot against
+     * sfRollupRoot — and the sequencer's Ed25519 signature over
+     * computeBatchHash() must verify.
      */
     static NotTEC
     preflight(PreflightContext const& ctx);
 
     /**
-     * Phase 1 preclaim — read-only ledger access.
+     * Read-only ledger access. Checks run cheapest-first, so a bad batch is
+     * rejected before any pairing cost is paid.
      *
-     *   1. Read RollupState SLE.
-     *      - Exists: check sfPrevRoot == sle[sfRollupRoot]
-     *                check sfBatchId == sle[sfBatchCounter] + 1
-     *      - Missing (first-ever batch):
-     *                check sfPrevRoot == kGenesisRollupRoot() (zeros)
-     *                check sfBatchId == 1
-     *   2. verifyProofMock() — ALWAYS returns true in Phase 1.
-     *      (Phase 4a replaces with RollupProver::verifyProof().)
+     *   1. Read the RollupState SLE. If it exists, sfPrevRoot must equal
+     *      sle[sfRollupRoot] and sfBatchId must be sle[sfBatchCounter] + 1;
+     *      for the first-ever batch, sfPrevRoot must be kGenesisRollupRoot()
+     *      and sfBatchId must be 1.
+     *   2. Reject duplicate nullifiers within the batch.
+     *   3. Reject any nullifier already spent on chain (NullifierStore).
+     *   4. Require the pool balance to cover the batch's total withdrawals.
+     *   5. Verify the per-entry Groth16 proofs against PoseidonCircuit's
+     *      verification key, one per entry.
      *
-     * Returns tecFAILED_PROCESSING on prevRoot mismatch (recoverable: the
-     * sequencer re-fetches currentRoot and resubmits), temMALFORMED on
-     * non-monotonic batchId.
-     *
-     * Deliberately NOT implemented here in Phase 1:
-     *   - Nullifier chain walking (needs NullifierPage — Phase 4a)
-     *   - Intra-batch nullifier uniqueness (Phase 4a)
-     *   - Pool balance sufficiency (Phase 4a)
+     * Returns tecFAILED_PROCESSING on prevRoot mismatch, which is
+     * recoverable — the sequencer re-fetches currentRoot and resubmits;
+     * temMALFORMED on non-monotonic batchId; temBAD_PROOF on a duplicate
+     * nullifier or failed verification; tecUNFUNDED on a spent nullifier;
+     * tecINSUF_RESERVE_LINE on insufficient pool balance.
      */
     static TER
     preclaim(PreclaimContext const& ctx);
 
     /**
-     * Phase 1 doApply — atomic state mutation.
+     * Atomic state mutation.
      *
-     *   1. RollupState::peek(view).
-     *   2. If nullptr: RollupState::createGenesis(view, sfSequencerPubKey).
-     *      This path only runs ONCE in the lifetime of a network.
-     *   3. Set sfBatchCounter = sfBatchId (the just-validated-monotonic value).
-     *   4. Set sfRollupRoot = sfRollupRoot (the post-batch Poseidon root,
-     *      accepted on trust in Phase 1; integrity verified in Phase 4a).
-     *   5. view.update(sle).
-     *
-     * Deliberately NOT implemented here in Phase 1:
-     *   - update_leaf() on RollupMerkleTree (Phase 3)
-     *   - Poseidon root recomputation and verify (Phase 4a)
-     *   - Nullifier insertion into NullifierPage chain (Phase 4a)
-     *   - Pool balance delta and XRP transfer to destination (Phase 4a)
+     *   1. Peek the RollupState SLE, creating genesis on the first batch —
+     *      a path that runs once in the lifetime of a network.
+     *   2. Load the tree and replay update_leaf() over the batch entries.
+     *   3. Require the recomputed root to equal the declared newRoot. This
+     *      cross-check is what lets the per-entry proofs share one
+     *      (prevRoot, newRoot) anchor without in-circuit aggregation.
+     *   4. Insert the batch's nullifiers into the NullifierStore.
+     *   5. Settle withdrawals against a real AccountRoot, so rippled's XRP
+     *      supply invariant sees a balanced transfer, and update the
+     *      RollupState counter and root.
      */
     TER
     doApply() override;
-
-private:
-    /**
-     * Phase-1-only mock. Always returns true — deliberately.
-     *
-     * Centralised in one place so that when Phase 4a replaces it with
-     * RollupProver::verifyProof(batchProof), there is a single call-site
-     * to update. DO NOT call this from anywhere else.
-     */
-    static bool
-    verifyProofMock(zkp::rollup::BatchProof const& bp);
 };
 
 }  // namespace ripple

@@ -1,10 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4a — NullifierStore: typed accessor over the ltNULLIFIER_PAGE
-    SLE chain. Phase 1 registered the SLE type but left it unused; this
-    file populates it.
+    NullifierStore: typed accessor over the ltNULLIFIER_PAGE SLE chain.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_NULLIFIERSTORE_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_NULLIFIERSTORE_H_INCLUDED

@@ -1,6 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // RollupSequencer2 implementation. See RollupSequencer2.h.
 
 #include "RollupSequencer2.h"

@@ -1,9 +1,7 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 1 — Foundation: BatchProof serialization implementation.
-    See v2.2 §8.2 for the wire format.
+    BatchProof serialization implementation. See BatchProof.h for the
+    wire format.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/BatchProof.h>
 
@@ -18,12 +16,10 @@ namespace rollup {
 
 namespace {
 
-// -----------------------------------------------------------------------------
 // Little-endian helpers for fixed-width integers. We use LE on the wire
 // because rippled's STAmount/STUInt32 fields are already LE internally when
 // serialized to JSON-friendly hex; this keeps the blob-level encoding aligned
 // with developer intuition when debugging with hexdump.
-// -----------------------------------------------------------------------------
 
 void
 writeU32LE(std::vector<std::uint8_t>& buf, std::uint32_t v)
@@ -83,14 +79,12 @@ readBytes(
 
 }  // unnamed namespace
 
-// =============================================================================
 // BatchProof::serialize
-// =============================================================================
 
 std::vector<std::uint8_t>
 BatchProof::serialize() const
 {
-    // Phase 1 invariant: callers are expected to check isWellFormed() first.
+    // Invariant: callers are expected to check isWellFormed() first.
     // We still defend against the most obvious misuse to keep this method
     // exception-safe and idempotent.
     if (txCount != entries.size())
@@ -129,9 +123,7 @@ BatchProof::serialize() const
     return buf;
 }
 
-// =============================================================================
 // BatchProof::deserialize
-// =============================================================================
 
 BatchProof
 BatchProof::deserialize(std::vector<std::uint8_t> const& blob, bool& ok)
@@ -197,9 +189,7 @@ BatchProof::deserialize(std::vector<std::uint8_t> const& blob, bool& ok)
     return bp;
 }
 
-// =============================================================================
 // BatchProof::isWellFormed
-// =============================================================================
 
 bool
 BatchProof::isWellFormed() const
@@ -212,7 +202,7 @@ BatchProof::isWellFormed() const
     if (entries.size() != txCount)
         return false;
 
-    // (3) proof must have some bytes. Phase 2 will tighten this to the
+    // (3) proof must have some bytes. This could be tightened to the
     //     exact Groth16 proof length (~190 B for BN-128).
     if (proof.empty())
         return false;
@@ -232,14 +222,11 @@ BatchProof::isWellFormed() const
     return true;
 }
 
-// =============================================================================
 // BatchProof::computeBatchHash
-// =============================================================================
 // bh = SHA256( batchId_le4 || prevRoot || newRoot || nf_0 || nf_1 || ... )
 //
 // This is the off-chain digest the sequencer Ed25519-signs. rippled verifies
 // the signature in BatchVerifier::preflight().
-// =============================================================================
 
 uint256
 BatchProof::computeBatchHash() const

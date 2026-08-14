@@ -509,9 +509,9 @@ TRANSACTION(ttZK_WITHDRAW, 1002, ZkWithdraw, ({
 }))
 
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup batch transaction 
-// -----------------------------------------------------------------------------
+// Track 1 rollup batch. Carries N per-entry Groth16 proofs, each verified
+// independently by BatchRollup::preclaim; the tree transition is replayed
+// on-chain in doApply.
 TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
     {sfBatchProof,       soeREQUIRED},
     {sfBatchId,          soeREQUIRED},
@@ -521,9 +521,9 @@ TRANSACTION(ttBATCH_ROLLUP, 61, BatchRollup, ({
     {sfSequencerPubKey,  soeREQUIRED},
 }))
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup Track 2 batch transaction 
-// -----------------------------------------------------------------------------
+// Track 2 rollup batch. Same field set as tt=61, but sfBatchProof holds ONE
+// Groth16 proof over the whole batch, so verification is O(1) in batch size
+// and the tree is not replayed on-chain.
 TRANSACTION(ttBATCH_ROLLUP2, 62, BatchRollup2, ({
     {sfBatchProof,       soeREQUIRED},
     {sfBatchId,          soeREQUIRED},
@@ -533,26 +533,22 @@ TRANSACTION(ttBATCH_ROLLUP2, 62, BatchRollup2, ({
     {sfSequencerPubKey,  soeREQUIRED},
 }))
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup Track 2 backed deposit (phase 1 of the two-phase deposit).
-// Signed by the DEPOSITOR with their ordinary XRPL key, so real XRP moves from
-// a real AccountRoot into escrow. Phase 2 (a ttBATCH_ROLLUP2 Deposit entry)
-// can then only consume what this recorded.
-// -----------------------------------------------------------------------------
+// Track 2 backed deposit — the L1 leg of a two-legged deposit. Signed by the
+// DEPOSITOR with their ordinary XRPL key, so real XRP moves from a real
+// AccountRoot into escrow. A ttBATCH_ROLLUP2 Deposit entry can then credit an
+// L2 leaf only by consuming what this recorded.
 TRANSACTION(ttROLLUP_DEPOSIT2, 63, RollupDeposit2, ({
     {sfAmount,      soeREQUIRED},  // XRP only, > 0
     {sfDepositApk,  soeREQUIRED},  // Baby Jubjub apk_x of the L2 leaf to credit
     {sfDestination, soeREQUIRED},  // must equal the anchored sfEscrowAccount
 }))
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup Track 1 + Aggregation batch transaction (Phase 8). Same field set
-// and same RollupState tree as ttBATCH_ROLLUP=61 — this is an ALTERNATIVE
-// proof-verification path for the identical rollup (one aggregate proof
-// instead of 8 independent ones checked in a loop), not a separate rollup.
-// sfBatchProof carries a serialised BatchProof whose `proof` bytes are an
-// AggregateProof blob (variable length) instead of 8x192B padded slots.
-// -----------------------------------------------------------------------------
+// Track 3 rollup batch: Track 1 with aggregated proofs. Same field set and the
+// same RollupState tree as tt=61 — an ALTERNATIVE proof-verification path for
+// the identical rollup (one aggregate proof instead of N independent ones
+// checked in a loop), not a separate rollup. sfBatchProof carries a serialised
+// BatchProof whose `proof` bytes are a variable-length AggregateProof blob
+// rather than fixed 192-byte padded slots.
 TRANSACTION(ttBATCH_ROLLUP_AGG, 64, BatchRollupAgg, ({
     {sfBatchProof,       soeREQUIRED},
     {sfBatchId,          soeREQUIRED},

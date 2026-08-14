@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 6 — Track 2 rollup state SLE helpers.
+    Track 2 rollup state SLE helpers. See RollupState2.h.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/RollupState2.h>
 #include <libxrpl/zkp/rollup/RollupKeylets.h>

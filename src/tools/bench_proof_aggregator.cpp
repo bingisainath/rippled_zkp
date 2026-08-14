@@ -5,12 +5,10 @@
 // batch), aggregates them via ProofAggregator (SnarkPack-style TIPP/GIPA —
 // see ProofAggregator.h for the exact construction and its N=8-era scoping
 // simplifications, which now apply at any N), verifies the aggregate, and
-// times every step. N is a runtime CLI argument specifically so the real
+// times every step. N is a runtime CLI argument so that the real
 // crossover-vs-Track-1 point can be MEASURED at N=16/32/64/128 rather than
-// projected analytically — see the track1-aggregation-snarkpack memory note
-// for why a naive O(log N) projection was not trustworthy enough to report
-// without measuring (the implementation's deliberate MIPP/KZG-opening
-// simplifications mean verify time is NOT actually O(log N) end-to-end).
+// projected analytically: the scheme's scoping simplifications mean verify
+// time is not O(log N) end-to-end, so a naive projection is not reportable.
 //
 // Usage: bench_proof_aggregator [N] [--tamper]
 //   N          batch size, must be a power of two (default 8)

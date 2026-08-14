@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# ============================================================
 #  l1_walkthrough_demo.sh — Narrate the FULL transaction flow (sequence-diagram
 #  steps 1-22) for ONE real BatchRollup, end to end.
-#  MSc Dissertation, Trinity College Dublin, 2026 — Sainath Bingi
 #
 #  L2 side (steps 1-9):  gen_batch_blob --verbose  → printed from its stderr.
 #  L1 side (steps 10-22): rippled runs with ZKR_WALKTHROUGH=1, which makes
@@ -15,10 +13,9 @@
 #  Separate port (5099), dir (/tmp/zkwt_node), pkill token (zkwt_node).
 #
 #  Usage:  bash tools/phase5/l1_walkthrough_demo.sh
-# ============================================================
 set -uo pipefail
 
-RIPPLED_ROOT="${RIPPLED_ROOT:-$HOME/Sainath/rippled_zkp}"
+RIPPLED_ROOT="${RIPPLED_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RIPPLED="${RIPPLED:-$RIPPLED_ROOT/build/build/Release/rippled}"
 GEN_TOOL="${GEN_TOOL:-$(dirname "${RIPPLED}")/gen_batch_blob}"
 
@@ -30,9 +27,9 @@ PORT="${ZKWT_PORT:-5099}"
 RPC_URL="http://127.0.0.1:${PORT}"
 KILL_TOKEN="zkwt_node"
 
-# Persistent evidence directory under the Sainath dir (NOT /tmp). Each run gets a
+# Persistent evidence directory outside /tmp. Each run gets a
 # timestamped subfolder so successive runs don't overwrite each other.
-OUT_BASE="${OUT_DIR:-$HOME/Sainath/walkthrough_evidence}"
+OUT_BASE="${OUT_DIR:-$HOME/walkthrough_evidence}"
 RUN_DIR="${OUT_BASE}/run_$(date +%Y%m%d_%H%M%S)"
 L2_TRACE="${RUN_DIR}/l2_trace.txt"
 L1_TRACE="${RUN_DIR}/l1_trace.txt"
@@ -138,7 +135,6 @@ clear 2>/dev/null || true
 cat <<BANNER
 ${C_HDR}╔══════════════════════════════════════════════════════════════════╗
 ║  ZK-ROLLUP FULL-FLOW WALKTHROUGH — sequence-diagram steps 1-22    ║
-║  MSc Dissertation · Trinity College Dublin · Sainath Bingi        ║
 ╚══════════════════════════════════════════════════════════════════╝${C_OFF}
 BANNER
 

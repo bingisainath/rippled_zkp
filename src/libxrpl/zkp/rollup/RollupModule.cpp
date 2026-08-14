@@ -1,8 +1,6 @@
-//------------------------------------------------------------------------------
 /*
-    Phase 4a — RollupModule implementation.
+    RollupModule implementation.
 */
-//==============================================================================
 
 #include <libxrpl/zkp/rollup/RollupModule.h>
 #include <libxrpl/zkp/rollup/RollupProver.h>
@@ -48,7 +46,7 @@ RollupModule::onStart(std::string const& keyPath)
         RollupProver::initialize(keyPath);
     }
 
-    // Track 2 (Phase 6): same reasoning, at BatchCircuitProver's own path.
+    // Track 2: same reasoning, at BatchCircuitProver's own path.
     try
     {
         BatchCircuitProver::initializeVerifierOnly();
@@ -62,7 +60,7 @@ RollupModule::onStart(std::string const& keyPath)
         BatchCircuitProver::initialize();
     }
 
-    // Track 1 + Aggregation (Phase 8): the aggregation SRS is tiny (a
+    // Track 3 (aggregation): the aggregation SRS is tiny (a
     // handful of curve points at N=8, nothing like a Groth16 proving key),
     // so there is no verifier-only/full split to bother with here — just
     // load it unconditionally.

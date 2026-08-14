@@ -1,11 +1,8 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
 // Off-circuit Poseidon hash — the single source of truth for hash values
 // computed outside any libsnark protoboard. Used by:
 //   - PoseidonGadget unit tests (compare in-circuit output to off-circuit output)
-//   - RollupMerkleTree (Phase 3) for sibling hashing
-//   - Witness generation (Phase 2c, Phase 4a) for cm and nf computation
+//   - RollupMerkleTree, for sibling hashing
+//   - Witness generation, for cm and nf computation
 //
 // Bit-exact compatible with circomlib's poseidon.circom and circomlibjs.
 
@@ -38,14 +35,14 @@ public:
     static FieldT
     hash(FieldT const& a, FieldT const& b);
 
-    // Generic n-input hash for n in {1, 2}. (For Phase 2 we only need n=2;
+    // Generic n-input hash for n in {1, 2}. (Only n=2 is needed here;
     // the 1-input form is exposed for nullifier compatibility tests.)
     static FieldT
     hashN(std::vector<FieldT> const& inputs);
 
     // Convenience: convert uint256 ↔ FieldT and hash.
     // Note: a uint256 may exceed the BN-128 field modulus; this function
-    // performs an explicit reduction (mod p). The Phase 1 BatchProof wire
+    // performs an explicit reduction (mod p). The BatchProof wire
     // format already constrains commitments / nullifiers to be valid field
     // elements, so the reduction is normally a no-op.
     static uint256
@@ -58,7 +55,7 @@ public:
     fieldToUint256(FieldT const& v);
 
     // Returns the precomputed Poseidon(0, 0) used as empty_hashes_[0]
-    // in RollupMerkleTree (research doc §3.3 Task 3.1).
+    // in RollupMerkleTree.
     static FieldT const&
     zeroZero();
 

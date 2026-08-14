@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — AccountLeaf hashing + SignedRequest message binding.
+// AccountLeaf hashing + SignedRequest message binding.
 // Run: ./rippled --unittest=ripple.zkp.AccountLeaf
 
 #include "../../../libxrpl/zkp/rollup/AccountLeaf.h"
@@ -38,7 +35,7 @@ public:
     void
     testLeafHashMatchesConvention()
     {
-        testcase("Phase 6 — leaf = Poseidon(apk_x, balance + 2^64*nonce)");
+        testcase("leaf = Poseidon(apk_x, balance + 2^64*nonce)");
         setupOnce();
 
         AccountLeaf leaf;
@@ -58,7 +55,7 @@ public:
     void
     testLeafHashBindsEveryField()
     {
-        testcase("Phase 6 — leaf hash changes with balance, nonce, key");
+        testcase("leaf hash changes with balance, nonce, key");
         setupOnce();
 
         AccountLeaf a;
@@ -81,7 +78,7 @@ public:
     void
     testPackingIsInjectiveAtExtremes()
     {
-        testcase("Phase 6 — (balance, nonce) packing injective at u64 extremes");
+        testcase("(balance, nonce) packing injective at u64 extremes");
         setupOnce();
 
         auto const max = std::numeric_limits<std::uint64_t>::max();
@@ -101,7 +98,7 @@ public:
     void
     testEmptyLeafIsZero()
     {
-        testcase("Phase 6 — empty leaf is the zero field element");
+        testcase("empty leaf is the zero field element");
         setupOnce();
         BEAST_EXPECT(AccountLeaf::emptyLeaf() == FieldT::zero());
     }
@@ -109,7 +106,7 @@ public:
     void
     testSignedRequestRoundTrip()
     {
-        testcase("Phase 6 — SignedRequest::make produces a verifiable request");
+        testcase("SignedRequest::make produces a verifiable request");
         setupOnce();
 
         auto const req = SignedRequest::make(
@@ -126,7 +123,7 @@ public:
     void
     testMessageBindsEveryField()
     {
-        testcase("Phase 6 — tampering any request field breaks the signature");
+        testcase("tampering any request field breaks the signature");
         setupOnce();
 
         auto const req = SignedRequest::make(
@@ -164,7 +161,7 @@ public:
     void
     testMetaPackingSeparatesTypes()
     {
-        testcase("Phase 6 — meta packing distinguishes request types");
+        testcase("meta packing distinguishes request types");
         setupOnce();
 
         // Same (value, nonce), different type => different meta.

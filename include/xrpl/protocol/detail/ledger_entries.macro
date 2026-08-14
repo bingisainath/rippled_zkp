@@ -453,11 +453,13 @@ LEDGER_ENTRY(ltNULLIFIER , 0x0083, nullifier, ({
     {sfNullifier, soeOPTIONAL},       // Nullifiers
 }))
 
-// -----------------------------------------------------------------------------
-// ZK-Rollup ledger entry types (Phase 1).
-// (0x0080 = ltOracle collision; 0x0081 = ltCredential collision;
-//  0x0082 = ltSHIELDED_POOL existing; 0x0083 = ltNULLIFIER existing.)
-// -----------------------------------------------------------------------------
+// ZK-Rollup ledger entry types. Codes start at 0x0084 because 0x0080..0x0083
+// are taken by ltOracle, ltCredential, ltSHIELDED_POOL and ltNULLIFIER.
+//
+// ltROLLUP_STATE is Track 1's and Track 3's shared state: batch counter, tree
+// root, sequencer key and the on-chain tree frontier. Track 2 reuses the same
+// entry type through its own keylet, and adds the escrow fields it needs to
+// back deposits with real L1 funds.
 LEDGER_ENTRY(ltROLLUP_STATE,   0x0084, RollupState,   ({
     {sfBatchCounter,    soeREQUIRED},
     {sfRollupRoot,      soeREQUIRED},

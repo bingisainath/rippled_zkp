@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include <libxrpl/zkp/rollup/RollupSequencer.h>
 
@@ -91,7 +89,7 @@ RollupSequencer::submitEntry(ClientEntry e)
         return RejectReason::InvalidEntry;
 
     // Per-entry proof validation BEFORE accepting into the queue.
-    // For Phase 4b prototype we accept any well-formed (>= 64-byte) blob;
+    // This prototype accepts any well-formed (>= 64-byte) blob;
     // the authoritative Groth16 check happens on-chain in
     // BatchVerifier::verifyBatchProof.
     try
@@ -148,7 +146,7 @@ applyOne(RollupMerkleTree& tree, ClientEntry const& e)
         else  // Withdraw
         {
             // Replace existing commitment at the client-supplied position.
-            // Phase 3 update_leaf throws std::out_of_range if the index
+            // update_leaf throws std::out_of_range if the index
             // is beyond size().
             if (e.leaf_position >= tree.size())
                 return false;
@@ -168,8 +166,8 @@ applyOne(RollupMerkleTree& tree, ClientEntry const& e)
 uint256
 RollupSequencer::dryRunRoot(std::vector<ClientEntry> const& es) const
 {
-    // RollupMerkleTree is non-copyable (Phase 3 doc, line 71-73: shared
-    // std::mutex member). The canonical Phase 3 "fresh dry-run copy"
+    // RollupMerkleTree is non-copyable: it holds a std::mutex member.
+    // The canonical "fresh dry-run copy"
     // pattern is to round-trip the frontier through serialiseFrontier()
     // / deserialiseFrontier(). The resulting `dryTree` mirrors localTree_'s
     // state without touching localTree_'s mutex or cached_nodes_ map.
@@ -257,7 +255,7 @@ RollupSequencer::assembleBatch()
 
     // 5. Compute batchHash and sign it with Ed25519.
     //    batchHash = SHA256(batchId || prevRoot || newRoot || nf_0..nf_7)
-    //    Off-circuit; mirrors BatchProof::computeBatchHash from Phase 1.
+    //    Off-circuit; mirrors BatchProof::computeBatchHash.
     uint256 const bh = bp.computeBatchHash();
     auto const sig = sign(seqPub_, seqPriv_, Slice(bh.data(), bh.size()));
     if (sig.size() != SEQUENCER_SIG_BYTES)
@@ -302,7 +300,7 @@ RollupSequencer::flush()
     }
     if (depth < BATCH_SIZE)
     {
-        // Phase 4b prototype: no padding. Phase 5 may add self-pay padding.
+        // This prototype does not pad the batch.
         return std::nullopt;
     }
     return assembleBatch();

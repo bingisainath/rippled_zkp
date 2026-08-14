@@ -1,7 +1,4 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
-//
-// Phase 6 gate — BatchProof2 wire format round-trip + hash binding.
+// BatchProof2 wire format round-trip + hash binding.
 // Run: ./rippled --unittest=ripple.zkp.BatchProof2
 
 #include "../../../libxrpl/zkp/rollup/BatchProof2.h"
@@ -59,7 +56,7 @@ public:
     void
     testRoundTrip()
     {
-        testcase("Phase 6 — BatchProof2 serialize/deserialize round-trip");
+        testcase("BatchProof2 serialize/deserialize round-trip");
         setupOnce();
 
         auto bp = sampleBatch(8);
@@ -84,7 +81,7 @@ public:
     void
     testShortBlobRejected()
     {
-        testcase("Phase 6 — truncated blob fails to deserialize");
+        testcase("truncated blob fails to deserialize");
         setupOnce();
 
         auto blob = sampleBatch(8).serialize();
@@ -97,7 +94,7 @@ public:
     void
     testTrailingGarbageRejected()
     {
-        testcase("Phase 6 — trailing garbage fails to deserialize");
+        testcase("trailing garbage fails to deserialize");
         setupOnce();
 
         auto blob = sampleBatch(8).serialize();
@@ -110,7 +107,7 @@ public:
     void
     testEntriesHashMatchesCircuit()
     {
-        testcase("Phase 6 — computeEntriesHash matches BatchCircuit native chain");
+        testcase("computeEntriesHash matches BatchCircuit native chain");
         setupOnce();
 
         // Build entries from real signed requests so the message convention
@@ -147,7 +144,7 @@ public:
     void
     testBatchHashBindsEntries()
     {
-        testcase("Phase 6 — computeBatchHash changes when an entry changes");
+        testcase("computeBatchHash changes when an entry changes");
         setupOnce();
 
         auto a = sampleBatch(8);

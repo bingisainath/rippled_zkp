@@ -1,4 +1,4 @@
-# Phase 5 — Benchmark Summary
+# Benchmark Summary
 
 Elapsed times in microseconds, aggregated over successful runs only. `proof_bytes` is the per-proof or per-batch Groth16 byte count; `tx_bytes` is the serialised STTx size; `fee_drops` is the ledger-recorded fee.
 

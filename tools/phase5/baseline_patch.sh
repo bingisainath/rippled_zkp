@@ -3,7 +3,8 @@
 # and (b) record "tecNO_DST_INSUF_XRP" outcome if it ever fires anyway.
 set -euo pipefail
 
-FILE="$HOME/Sainath/rippled_zkp/src/test/zkp/rollup/RollupBench_test.cpp"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FILE="$REPO_ROOT/src/test/zkp/rollup/RollupBench_test.cpp"
 
 # Insert the funding block. The marker is the line "std::size_t totalBytes = 0;"
 # which immediately follows the dests construction. We insert above it.

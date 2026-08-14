@@ -1,12 +1,8 @@
-//------------------------------------------------------------------------------
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
-    Copyright (c) 2026 Trinity College Dublin (MSc dissertation).
 
-    Phase 1 — Foundation: BatchProof binary serialization.
-    See ZK Rollup on XRPL Technical Development Document v2.2 §8.2.
+    BatchProof: binary serialization of a Track 1 batch.
 */
-//==============================================================================
 
 #ifndef RIPPLE_ZKP_ROLLUP_BATCHPROOF_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_BATCHPROOF_H_INCLUDED
@@ -22,9 +18,7 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
-// =============================================================================
-// Protocol constants (v2.2)
-// =============================================================================
+// Protocol constants
 
 /** Target batch size — prototype: 8. */
 constexpr std::uint32_t BATCH_SIZE = 8;
@@ -32,7 +26,7 @@ constexpr std::uint32_t BATCH_SIZE = 8;
 /** Absolute max blob size the transactor will accept (safety net in preflight). */
 constexpr std::size_t MAX_BATCH_BLOB_BYTES = 1'000'000;  // 1 MB
 
-/** Fixed per-entry size on the wire (v2.2 §8.2). */
+/** Fixed per-entry size on the wire. */
 constexpr std::size_t ROLLUP_TX_ENTRY_BYTES = 93;
 
 /** Fixed header size before the Groth16 proof bytes. */
@@ -46,9 +40,7 @@ constexpr std::size_t BATCH_HEADER_BYTES =
 /** Ed25519 signature length. */
 constexpr std::size_t SEQUENCER_SIG_BYTES = 64;
 
-// =============================================================================
 // Types
-// =============================================================================
 
 /**
  * Per-transaction public data inside a rollup batch.
@@ -87,7 +79,7 @@ static_assert(sizeof(std::uint64_t) == 8,  "u64 must be 8 bytes");
 //   32+32+8+1+20 = 93 B
 
 /**
- * The serialized batch blob. Wire format (v2.2 §8.2):
+ * The serialized batch blob. Wire format:
  *
  *   offset  bytes  field
  *   ------  -----  --------------------------------------------
@@ -117,7 +109,7 @@ struct BatchProof
     std::array<std::uint8_t, SEQUENCER_SIG_BYTES> sequencerSig{};
 
     /**
-     * Serialize to a contiguous byte buffer in the v2.2 wire format.
+     * Serialize to a contiguous byte buffer in the wire format above.
      * Never throws — returns empty vector on internal inconsistency
      * (callers should only serialize after isWellFormed()).
      */
@@ -134,7 +126,7 @@ struct BatchProof
      * Structural sanity check — stateless, no crypto. Used by preflight().
      *   1) 1 ≤ txCount ≤ BATCH_SIZE
      *   2) entries.size() == txCount
-     *   3) proof is non-empty (Phase 1: any size; Phase 2+: tighter)
+     *   3) proof is non-empty
      *   4) full serialized size ≤ MAX_BATCH_BLOB_BYTES
      */
     bool isWellFormed() const;
@@ -147,7 +139,7 @@ struct BatchProof
      * happens in rippled's preflight() using the existing ed25519 helper —
      * no in-circuit work needed.
      *
-     * v2.2 Cryptographic Formula Table (§8.1): "Batch Hash".
+     * The batch hash the sequencer signs.
      */
     uint256 computeBatchHash() const;
 };

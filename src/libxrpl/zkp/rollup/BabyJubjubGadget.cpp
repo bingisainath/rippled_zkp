@@ -1,5 +1,3 @@
-// Copyright 2026 Sainath, Trinity College Dublin
-// SPDX-License-Identifier: ISC
 
 #include "BabyJubjubGadget.h"
 
@@ -7,9 +5,7 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
-// =============================================================================
 // BabyJubjubAddGadget
-// =============================================================================
 
 BabyJubjubAddGadget::BabyJubjubAddGadget(
     libsnark::protoboard<FieldT>& pb,
@@ -115,9 +111,7 @@ BabyJubjubAddGadget::generate_r1cs_witness()
     this->pb.val(y3_) = p3.y;
 }
 
-// =============================================================================
 // BabyJubjubMulGadget
-// =============================================================================
 
 BabyJubjubMulGadget::BabyJubjubMulGadget(
     libsnark::protoboard<FieldT>& pb,
@@ -205,7 +199,7 @@ BabyJubjubMulGadget::generate_r1cs_constraints()
     // identity (0, 1). Without these four linear constraints a malicious
     // prover could assign arbitrary values to acc[0] / neg_offset and shift
     // the output by any point delta (q = s·P + Δ) — which would let a
-    // forger fix up any equation built on top of this gadget (Phase 6
+    // forger fix up any equation built on top of this gadget (the
     // EdDSAGadget soundness audit finding; also hardens PoseidonCircuit's
     // apk derivation). The witness generator already assigns exactly these
     // values, so honest proofs are unaffected.
