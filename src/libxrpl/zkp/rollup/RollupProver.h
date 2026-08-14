@@ -59,7 +59,7 @@ public:
     // ZkProver loads SHA-256-circuit keys; we load Poseidon-circuit keys.
     static void
     initialize(std::string const& key_path = defaultKeyPath(),
-               std::size_t tree_depth = 16);  // Lever #2: was 32
+               std::size_t tree_depth = 16);
 
     // Load ONLY the verification key — for a node that verifies batches but
     // never builds them (i.e. rippled itself; proving happens in a separate

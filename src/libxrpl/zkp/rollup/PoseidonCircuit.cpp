@@ -22,7 +22,7 @@ public:
         pb_ = std::make_shared<libsnark::protoboard<FieldT>>();
 
         // Allocate primary inputs
-        // Lever #1 (single Merkle path): the 2nd public input was previously
+        // Single Merkle path: the 2nd public input was previously
         // `new_anchor` (the post-update root). The new root is now enforced
         // OFF-circuit by doApply's deterministic root-replay, so the circuit
         // no longer proves a second Merkle path. Instead it exposes `new_cm`

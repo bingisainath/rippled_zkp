@@ -1,6 +1,6 @@
 // Validates the *composed* single-note PoseidonCircuit:
 //   1. The constraint count lands inside the design budget (~9–22K for N=1,
-//      depth=32, two auth paths). A blow-out here means a sub-gadget regressed.
+//      depth=32). A blow-out here means a sub-gadget regressed.
 //   2. A correctly built witness satisfies the constraint system end-to-end.
 //   3. Tampering with any public input (anchor, new_anchor, nullifier, value)
 //      makes the system unsatisfiable — i.e. soundness at the R1CS layer
@@ -28,9 +28,9 @@ using namespace zkp::rollup;
 
 class PoseidonCircuit_test : public beast::unit_test::suite
 {
-    // Tree depth used everywhere in this suite. Matches the dissertation's
-    // on-chain design (depth-32 IMT). Kept small enough to test fast but large
-    // enough to exercise the auth-path loop.
+    // Tree depth used everywhere in this suite. Deliberately deeper than the
+    // production kRollupTreeDepth, to exercise the auth-path loop harder than
+    // deployment does; the circuit is depth-parametric.
     static constexpr std::size_t kDepth = 32;
 
     // Build an honest witness for a "deposit then update" transition where:

@@ -171,7 +171,7 @@ public:
         BEAST_EXPECT(pd.proof_bytes.size() <= 400);
 
         BEAST_EXPECT(pd.anchor == w.prev_root);
-        // Lever #1: the circuit's second public input carries the
+        // The circuit's second public input carries the
         // NEW COMMITMENT, not the new root — the root binding moved to
         // doApply's deterministic replay. See RollupProver::createProof.
         BEAST_EXPECT(pd.new_anchor == w.new_note.commitment());

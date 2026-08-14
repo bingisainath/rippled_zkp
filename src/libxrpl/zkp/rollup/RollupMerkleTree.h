@@ -32,8 +32,8 @@ namespace rollup {
 
 /// Default Merkle depth.  Matches PoseidonCircuit's compile-time depth
 /// and the treeDepth field stored in the on-chain RollupState SLE.
-/// At depth 32 the tree holds up to 2^32 leaves.
-constexpr std::size_t kDefaultRollupTreeDepth = 16;  // Lever #2: was 32
+/// A tree of depth d holds up to 2^d leaves.
+constexpr std::size_t kDefaultRollupTreeDepth = 16;
 
 /// MerkleWitness — the data the prover hands to PoseidonCircuit.
 ///
@@ -66,7 +66,7 @@ class RollupMerkleTree
 {
 public:
     /// Construct an empty tree of the given depth.  Depth must be in [1, 64];
-    /// kDefaultRollupTreeDepth = 32 is the production value.
+    /// kDefaultRollupTreeDepth is the production value.
     explicit RollupMerkleTree(std::size_t depth = kDefaultRollupTreeDepth);
 
     // core interface
@@ -154,7 +154,7 @@ public:
     //       32 bytes : node hash
     //
     // Total max size: 8 + (depth_+1) * (1 + 8 + 32) = 8 + 33*41 = 1361 bytes
-    // for depth=32. Well within STI_VL limits.
+    // in the worst case at depth 32. Well within STI_VL limits.
 
     std::vector<std::uint8_t> serialiseFrontier() const;
     void deserialiseFrontier(std::vector<std::uint8_t> const& blob);

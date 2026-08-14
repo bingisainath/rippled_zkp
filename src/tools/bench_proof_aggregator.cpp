@@ -1,4 +1,4 @@
-// bench_proof_aggregator — Stage A benchmark for Track 1 proof aggregation.
+// bench_proof_aggregator (Track 3) — Stage A benchmark for Track 1 proof aggregation.
 //
 // Generates N REAL Track 1 Groth16 proofs (same PoseidonCircuit, same
 // RollupProver::createProof path gen_batch_blob uses for a genesis deposit

@@ -105,8 +105,8 @@ class RollupSequencer
 {
 public:
     // The sequencer key pair MUST match sfSequencerKey anchored at genesis
-    // Tree depth MUST be 32 to match the on-chain
-    // RollupState.sfRollupTreeDepth.
+    // treeDepth MUST equal kRollupTreeDepth, to match the on-chain
+    // RollupState.sfRollupTreeDepth. The constructor enforces this.
     RollupSequencer(
         PublicKey const& seqPub,
         SecretKey const& seqPriv,

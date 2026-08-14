@@ -18,7 +18,7 @@ std::shared_ptr<libsnark::r1cs_gg_ppzksnark_proving_key<DefaultCurve>>
 std::shared_ptr<libsnark::r1cs_gg_ppzksnark_verification_key<DefaultCurve>>
     RollupProver::verification_key_;
 std::shared_ptr<PoseidonCircuit> RollupProver::circuit_;
-std::size_t RollupProver::tree_depth_ = 16;  // Lever #2: was 32
+std::size_t RollupProver::tree_depth_ = 16;
 bool RollupProver::initialised_ = false;
 
 std::string const&
@@ -235,7 +235,7 @@ RollupProver::createProof(
     RollupProofData out;
     out.proof_bytes = serializeProof(proof);
     out.anchor = prev_root;
-    // Lever #1: the 2nd public input is now the new commitment (new_cm), not
+    // The 2nd public input is the new commitment (new_cm), not
     // the post-update root. (Field reused; carries new_cm.) The new root is
     // enforced off-circuit by doApply's replay.
     out.new_anchor = new_note.commitment();
@@ -329,7 +329,7 @@ RollupProver::verifyEntry(
     auto const& e = bp.entries[entryIndex];
 
     // Pack public inputs in the order PoseidonCircuit allocates them
-    // (Lever #1, single-path circuit):
+    // (single-path circuit):
     //   anchor    = prevRoot         (this entry's input-tree root)
     //   new_cm    = e.commitment     (the new note commitment, binds value)
     //   nullifier = e.nullifier      (Poseidon(ask, rho_old))

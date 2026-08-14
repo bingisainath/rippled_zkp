@@ -1,7 +1,8 @@
 /*
     This file is part of rippled_zkp: ZK-Rollup extension for XRPL.
 
-    BatchVerifierAgg: on-chain transactor for ttBATCH_ROLLUP_AGG.
+    BatchVerifierAgg: on-chain transactor for ttBATCH_ROLLUP_AGG, Track 3's
+    proof path.
 
     This reaches Track 1's existing RollupState tree — same keylet, same
     nullifier and commitment model, same genesis — by an alternative proof

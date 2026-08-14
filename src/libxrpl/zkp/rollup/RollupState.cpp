@@ -20,7 +20,8 @@ namespace ripple {
 namespace zkp {
 namespace rollup {
 
-// Genesis root: root of a depth-32 Poseidon tree pre-seeded with 8 null-note
+// Genesis root: root of a Poseidon tree at kRollupTreeDepth, pre-seeded with
+// 8 null-note
 // commitments (one per genesis leaf slot). Seeds 0..7 produce deterministic,
 // distinct notes so their nullifiers are all unique (avoiding in-batch
 // duplicate rejection on the first real batch).

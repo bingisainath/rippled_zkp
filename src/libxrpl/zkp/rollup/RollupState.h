@@ -26,8 +26,8 @@ namespace rollup {
 
 class RollupMerkleTree;
 
-// Lever #2 (depth reduction): 32 -> 16. 2^16 = 65536 leaf slots is ample for
-// the prototype (we use 8 fixed genesis slots). Halving the depth halves the
+// Depth reduction, 32 -> 16: 2^16 = 65536 leaf slots is ample for the
+// prototype, which uses 8 fixed genesis slots. Halving the depth halves the
 // in-circuit Merkle path length, cutting proving time further. All depth
 // literals (kDefaultRollupTreeDepth, the RollupProver defaults) and the circuit
 // must agree; the genesis root (kGenesisRollupRoot) recomputes from this value.

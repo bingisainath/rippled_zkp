@@ -1,8 +1,8 @@
-// ProofAggregator: SnarkPack-style aggregation of Track 1's N independent
-// per-user Groth16 proofs into ONE aggregate proof, verified with O(log N)
-// pairings for the recursion instead of N separate verifications — while
-// users keep proving locally, so the sequencer never sees a transaction's
-// contents (contrast Track 2, where the sequencer proves).
+// ProofAggregator: the core of Track 3. SnarkPack-style aggregation of Track
+// 1's N independent per-user Groth16 proofs into ONE aggregate proof, verified
+// with O(log N) pairings for the recursion instead of N separate
+// verifications — while users keep proving locally, so the sequencer never
+// sees a transaction's contents (contrast Track 2, where the sequencer proves).
 //
 // Construction: the merged MT-IPP scheme of SnarkPack [BMMTV21, eprint
 // 2021/529; FC22], over N Groth16 proofs sharing one verification key

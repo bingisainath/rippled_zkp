@@ -70,7 +70,7 @@ RollupSequencer::isEntryWellFormed(ClientEntry const& e) const
     if (e.entry.txType == RollupTxType::Withdraw &&
         e.entry.destination == AccountID{})
         return false;
-    // leaf_position must fit in tree depth (2^32 leaves at depth=32).
+    // leaf_position must fit in the tree depth (2^depth leaves).
     if (treeDepth_ < 64 &&
         e.leaf_position >= (std::uint64_t{1} << treeDepth_))
         return false;

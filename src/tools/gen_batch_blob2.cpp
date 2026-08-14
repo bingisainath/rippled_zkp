@@ -1,4 +1,4 @@
-// gen_batch_blob2 — off-node generator for a Track 2 (Option A) ttBATCH_ROLLUP2
+// gen_batch_blob2 — off-node generator for a Track 2 ttBATCH_ROLLUP2
 // sfBatchProof blob. Mirrors gen_batch_blob.cpp (Track 1) but builds ONE
 // monolithic proof via RollupSequencer2 instead of N per-entry proofs.
 //

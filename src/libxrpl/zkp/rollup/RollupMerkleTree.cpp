@@ -319,7 +319,8 @@ RollupMerkleTree::clear()
 //       8 bytes  : position within level
 //       32 bytes : node hash
 //
-// At depth 32 the max blob is 8 + 33*41 = 1361 bytes; well within STI_VL.
+// At the maximum depth of 32 the blob is 8 + 33*41 = 1361 bytes; well within
+// STI_VL.
 //
 // Note: this dumps only the rightmost cached node at each level, which is
 // sufficient to reconstruct correct roots and authentication paths for all

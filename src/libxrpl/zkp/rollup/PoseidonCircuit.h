@@ -1,8 +1,10 @@
 // PoseidonCircuit: the per-note R1CS proving circuit used by Track 1.
 //
-// Public inputs:
+// Public inputs, in allocation order (5):
 //   anchor       Merkle root before this leaf is updated
-//   new_anchor   root after the update
+//   new_cm       the new note commitment. NOT the post-update root: the new
+//                root is enforced off-circuit by doApply's deterministic
+//                replay, which ties this commitment to the batch's newRoot.
 //   nullifier    nf = Poseidon(ask, rho)
 //   value_pub    the deposited or withdrawn amount. Unhidden: the threat
 //                model for the rollup is integrity, not confidentiality.
@@ -13,18 +15,18 @@
 //
 // Private inputs: value, rho, r, the spending key ask as a 254-bit
 // decomposition, apk_x/apk_y from the in-circuit scalar multiplication, the
-// leaf position bits, the auth-path siblings, and the new leaf commitment.
+// leaf position bits, and the auth-path siblings.
 //
 // Constraints proved:
 //   1. apk = [ask]*G_J
 //   2. cm  = Poseidon(value, rho, r, apk_x)
 //   3. nf  = Poseidon(ask, rho)
 //   4. cm is at leaf_pos in the tree rooted at anchor, via a Poseidon path
-//   5. cm' — the new commitment for the same account — sits at the same
-//      leaf_pos and hashes up to new_anchor along the same path
+//   5. new_cm is well formed for the same account, which binds value_pub
 //
-// Both the prevRoot and newRoot path checks are included, rather than
-// prevRoot alone, so the circuit also proves the leaf update itself.
+// The circuit walks ONE Merkle path, not two. An earlier revision proved a
+// second path up to the post-update root; moving that binding to doApply's
+// replay halves the Poseidon path work at no on-chain cost.
 
 #ifndef RIPPLE_ZKP_ROLLUP_POSEIDON_CIRCUIT_H_INCLUDED
 #define RIPPLE_ZKP_ROLLUP_POSEIDON_CIRCUIT_H_INCLUDED
